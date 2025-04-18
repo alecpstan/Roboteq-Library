@@ -441,6 +441,9 @@ class RoboteqDriver:
             "max_mm": max_mm,
         }
 
+        # Put controller in closed-loop count position mode
+        self.motor_config(Config.OPERATING_MODE, set=True, cc=axis, nn=3)
+
         print(f"Axis {axis} configured for linear movement:")
         print(
             f"  Points per revolution: {points_per_rev} (from controller EPPR configuration)"

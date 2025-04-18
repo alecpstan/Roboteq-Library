@@ -1,13 +1,13 @@
 {
     "devices": [
         {
-            "name": "Driver name 1",
+            "name": "Driver1",
             "type": "serial",
             "port": "/dev/tty.usbmodem1234",
             "num_axes": 2
         },
         {
-            "name": "Driver name 2",
+            "name": "Driver2",
             "type": "tcp",
             "host": "192.168.1.10",
             "port": 9571,
