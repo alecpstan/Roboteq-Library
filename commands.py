@@ -2,7 +2,8 @@
 # These commands are used to control the motor, read feedback, and configure settings.
 # The commands are organized into categories for better readability.
 
-class command:
+
+class Command:
     # Motion Control Commands
     SET_ACCELERATION = "AC"
     NEXT_ACCELERATION = "AX"
@@ -52,7 +53,8 @@ class command:
     MOTOR_SETUP = "MSS"
     SET_VARIABLE = "VAR"
 
-class query:
+
+class Query:
     # Motor Feedback Queries
     GET_AMPS = "A"
     GET_AC_POWER = "ACP"
@@ -94,39 +96,40 @@ class query:
     GET_VOLTS = "V"
     GET_VAR = "VAR"
 
-class config:
+
+class Config:
     # Motor Configuration
     ACCELERATION = "AC"
     AMPS_LIMIT = "ALIM"
     AMP_TRIGGER = "ATRIG"
     BATTERY_LIMITS = "BLFB"
-    
+
     # Control Loops Configuration
     PID = "CPID"
     OPERATING_MODE = "MMOD"
     POSITION_COUNT = "MVEL"
-    
+
     # Encoder Configuration
     ENCODER_PPR = "EPPR"
     ENCODER_USE = "EMOD"
-    
+
     # Digital Input Configuration
     DIN_ACTION = "DINA"
     DIN_CONFIG = "DINC"
-    
+
     # Digital Output Configuration
     DOUT_ACTION = "DOA"
     DOUT_CONFIG = "DOC"
-    
+
     # Analog Input Configuration
     AIN_ACTION = "AIC"
     AIN_MIN_MAX = "AMIN"
-    
+
     # Communication Configuration
     RS232_CONFIG = "RSBR"
     CAN_CONFIG = "CAN"
     TCP_CONFIG = "TCPCONF"
-    
+
     # System Configuration
     SCRIPT_CONFIG = "BRUN"
     DEVICE_ID = "DID"
