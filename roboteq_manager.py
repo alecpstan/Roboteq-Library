@@ -16,7 +16,7 @@ class RoboteqDriver:
     _ACK_CHAR = b"\x06"  # Acknowledge character
 
     # ----------------------------------------------------------------------------------------------------
-    #           External Helper functions
+    #           External static functions
     # ----------------------------------------------------------------------------------------------------
 
     @staticmethod
@@ -278,14 +278,15 @@ class RoboteqDriver:
         self._send_data(to_send.encode())
         return self._read_data().decode().strip()
 
-    def run_command(self, cmd_str, cc=1, nn=None):
+    def send(self, send_str, cc=None, nn=None, mm=None, ee=None, set=False):
         """
         Send a runtime command to the controller
 
         Args:
-            cmd_str (str): Command string from cmd class
+            send_str (str): Command string from cmd class
             cc (int or str): Usually Axis number (default: 1)
             nn (int, optional): Value for command if required
+            set (bool): If True, command will set the config value (default: False). Ignored if not Config command
 
         Returns:
             str: Response from controller ('+' for success)
@@ -293,17 +294,36 @@ class RoboteqDriver:
         Raises:
             ValueError: If command not in command class or command fails
         """
-        # Validate command exists in command class
-        if not hasattr(Command, cmd_str):
+        # Determine which command type and set prefix accordingly
+        if hasattr(Command, send_str):
+            prefix = "!"
+        elif hasattr(Query, send_str):
+            prefix = "?"
+        elif hasattr(Config, send_str):
+            prefix = "^" if set else "~"
+        else:
             raise ValueError(
-                f"Invalid command: {cmd_str}. Must be a command from RoboteqDriver.cmd"
+                f"Invalid command: {send_str}. Must be a command from Command, Query, or Config classes"
             )
 
-        # Format command string with nn if provided
+        # Create the initial command string with the appropriate prefix
+        formatted_str = f"{prefix}{send_str}\r\n"
+
+        # Replace cc with its value if present in the string
+        if cc is not None:
+            formatted_str = formatted_str.replace("cc", str(cc))
+
+        # Replace nn with its value if present and nn is provided
         if nn is not None:
-            formatted_str = f"!{cmd_str} {cc} {nn}\r\n"
-        else:
-            formatted_str = f"!{cmd_str} {cc}\r\n"
+            formatted_str = formatted_str.replace("nn", str(nn))
+
+        # Replace mm with its value if present and mm is provided
+        if mm is not None:
+            formatted_str = formatted_str.replace("mm", str(mm))
+
+        # Replace ee with its value if present and ee is provided
+        if ee is not None:
+            formatted_str = formatted_str.replace("ee", str(ee))
 
         # Use send_raw to handle sending the command
         response = self.send_raw(formatted_str)
@@ -311,82 +331,6 @@ class RoboteqDriver:
         # Check for error response
         if response == "-":
             raise ValueError(f"Command {formatted_str} failed")
-
-        return response
-
-    def run_query(self, qry_str, cc=1):
-        """
-        Send a runtime query to the controller
-
-        Args:
-            qry_str (str): Query string from qry class
-            cc (int or str): Axis number (default: 1)
-
-        Returns:
-            str: Response from controller with queried argument
-
-        Raises:
-            ValueError: If query not in qry class or query fails
-        """
-        # Validate query exists in qry class
-        if not hasattr(Query, qry_str):
-            raise ValueError(
-                f"Invalid query: {qry_str}. Must be a query from RoboteqDriver.qry"
-            )
-
-        # Format query string
-        if cc is not None:
-            formatted_str = f"?{qry_str} {cc}\r\n"
-
-        # Use send_raw to handle sending the query
-        response = self.send_raw(formatted_str)
-
-        # Check for error response
-        if response == "-":
-            raise ValueError(f"Query {formatted_str} failed")
-
-        return response
-
-    def motor_config(self, config_str, cc=1, nn=None, set=False):
-        """
-        Read a configuration nn from the controller
-
-        Args:
-            config_str (str): Configuration run_query string from get_config class
-            cc (int or str): Axis number (default: 1)
-            nn (int, optional): Value for configuration if set (default: None)
-            set (True or False): Set or get configuration nn (default: False)
-
-        Returns:
-            str: Configuration nn from controller or confirmation of set nn
-
-        Raises:
-            ValueError: If config_str not in get_config class or run_query fails
-        """
-        # Validate config exists in get_config class
-        if not hasattr(Config, config_str):
-            raise ValueError(
-                f"Invalid configuration run_query: {config_str}. Must be from RoboteqDriver.config"
-            )
-
-        # Add ~ or ^ depending if set of get
-        if set:
-            config_str = f"^{config_str}"
-        else:
-            config_str = f"~{config_str}"
-
-        # Format configuration string
-        if nn is not None:
-            formatted_str = f"{config_str} {cc} {nn}\r\n"
-        else:
-            formatted_str = f"{config_str} {cc}\r\n"
-
-        # Use send_raw to handle sending the configuration run_query
-        response = self.send_raw(formatted_str)
-
-        # Check for error response
-        if response == "-":
-            raise ValueError(f"Configuration run_query {formatted_str} failed")
 
         return response
 

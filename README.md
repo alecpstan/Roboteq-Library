@@ -34,7 +34,6 @@ Contains the logic for running custom control sequences on connected devices:
 
 - Provides a framework to execute user-defined motor control programs
 - Includes helper functions to find devices by name
-- Can load and execute commands from a JSON file
 - Demonstrates proper usage of the driver API
 
 ## Getting Started

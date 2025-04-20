@@ -4,6 +4,14 @@ from pathlib import Path
 
 import roboteq_manager  # Assumed to be in the same directory
 
+# -------------------------------THIS SCRIPT IS OPTIONAL--------------------------
+#        "user_program.py" is the main program and will be run on completion
+# --------------------------------------------------------------------------------
+
+# This script is designed to automate the process of connecting to Roboteq motor drivers.
+# It scans for devices, allows the user to select them, and establishes connections.
+# It also saves the configuration to a JSON file for future use.
+
 
 def load_config():
     """Load configuration from config.json if it exists."""
