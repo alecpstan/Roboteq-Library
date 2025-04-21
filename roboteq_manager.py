@@ -96,7 +96,7 @@ class RoboteqDriver:
 
         # Final summary
         print(
-            f"{GRAY}TCP scan complete. Found {len(available_connections)} Roboteq controller(s).{RESET}"
+            f"{GREEN}TCP scan complete. Found {len(available_connections)} Roboteq controller(s).{RESET}"
         )
 
         return available_connections
@@ -176,7 +176,7 @@ class RoboteqDriver:
 
         # Final summary
         print(
-            f"{GRAY}Serial port scan complete. Found {len(available_connections)} Roboteq controller(s).{RESET}"
+            f"{GREEN}Serial port scan complete. Found {len(available_connections)} Roboteq controller(s).{RESET}"
         )
 
         return available_connections
