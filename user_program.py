@@ -112,12 +112,12 @@ def main():
     # Initialize your devices here
     devices = [
         RoboteqDriver(
-            connection_type="serial",
+            connect_using="serial",
             com_port="/dev/ttyUSB0",
             num_axis=2,
         ),
         RoboteqDriver(
-            connection_type="tcp",
+            connect_using="tcp",
             host="192.168.1.10",
             tcp_port=9571,
             num_axis=1,

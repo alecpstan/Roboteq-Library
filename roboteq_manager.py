@@ -4,6 +4,14 @@ import glob
 import time
 import sys
 from commands import Command, Query, Config
+from json_parser import *
+
+# ANSI color codes for terminal output
+RESET = "\033[0m"
+GRAY = "\033[90m"
+GREEN = "\033[92m"
+RED = "\033[91m"
+YELLOW = "\033[93m"
 
 
 class RoboteqDriver:
@@ -30,9 +38,9 @@ class RoboteqDriver:
             timeout (float): Time to wait for response from each host in seconds
 
         Returns:
-            list: List of (host, port) tuples where Roboteq controllers were detected
+            list: List of socket.socket objects connected to detected Roboteq controllers
         """
-        available_hosts = []
+        available_connections = []
 
         # Parse host range
         base_ip, start_end = host_range.split(".")[-1].split("-")
@@ -41,15 +49,15 @@ class RoboteqDriver:
         end = int(start_end) if "-" in host_range else start
 
         # Provide initial feedback
-        print(f"Scanning TCP/IP range {host_range} on port {port}...")
+        print(f"{GRAY}Scanning TCP/IP range {host_range} on port {port}...{RESET}")
         print(
-            f"This will check {end - start + 1} addresses with a {timeout}s timeout each"
+            f"{GRAY}This will check {end - start + 1} addresses with a {timeout}s timeout each{RESET}"
         )
 
         # Track progress
         total_hosts = end - start + 1
         hosts_checked = 0
-        progress_step = max(1, total_hosts // 10)  # Show progress every ~10%
+        progress_step = max(1, total_hosts // 10)
 
         for i in range(start, end + 1):
             hosts_checked += 1
@@ -71,30 +79,27 @@ class RoboteqDriver:
                 s.settimeout(timeout)
                 s.connect((host, port))
 
-                # Send query character and read response
-                s.sendall(RoboteqDriver._QRY_CHAR)
-                response = s.recv(1)
-
-                # Check if response is ACK
-                if response == RoboteqDriver._ACK_CHAR:
-                    print(f"✓ Found Roboteq controller at {host}:{port}")
-                    available_hosts.append((host, port))
+                # Use shared probe function
+                if RoboteqDriver.probe_connection(s, timeout):
+                    print(f"{GREEN}✓ Found Roboteq controller at {host}:{port}{RESET}")
+                    available_connections.append(s)  # Keep the connection open
                 else:
-                    print(f"× Device at {host}:{port} is not a Roboteq controller")
+                    print(
+                        f"{RED}× Device at {host}:{port} is not a Roboteq controller{RESET}"
+                    )
 
-                s.close()
+                s.close()  # Close connection
+
             except (socket.error, socket.timeout):
                 # Skip hosts that can't be connected to
                 continue
 
         # Final summary
-        print(f"TCP scan complete. Found {len(available_hosts)} Roboteq controller(s).")
-        if available_hosts:
-            print("Available controllers:")
-            for host, port in available_hosts:
-                print(f"  - {host}:{port}")
+        print(
+            f"{GRAY}TCP scan complete. Found {len(available_connections)} Roboteq controller(s).{RESET}"
+        )
 
-        return available_hosts
+        return available_connections
 
     @staticmethod
     def scan_ports(timeout=0.5):
@@ -105,9 +110,9 @@ class RoboteqDriver:
             timeout (float): Time to wait for response from each port in seconds
 
         Returns:
-            list: List of port names where Roboteq controllers were detected
+            list: List of serial.Serial objects connected to detected Roboteq controllers
         """
-        available_ports = []
+        available_connections = []
 
         # Get list of all serial ports based on OS
         if sys.platform.startswith("win"):
@@ -125,13 +130,13 @@ class RoboteqDriver:
             raise OSError("Unsupported platform")
 
         print(
-            f"Found {len(ports)} potential ports to check with {timeout}s timeout each"
+            f"{GRAY}Found {len(ports)} potential ports to check with {timeout}s timeout each{RESET}"
         )
 
         # Track progress
         total_ports = len(ports)
         ports_checked = 0
-        progress_step = max(1, total_ports // 10)  # Show progress every ~10%
+        progress_step = max(1, total_ports // 10)
 
         for port in ports:
             ports_checked += 1
@@ -147,19 +152,23 @@ class RoboteqDriver:
                 )
 
             try:
-                # Try to open port
-                with serial.Serial(port, baudrate=115200, timeout=timeout) as ser:
-                    # Clear any existing data
-                    ser.reset_input_buffer()
+                # Create a serial connection (don't use 'with' as we want to keep it open)
+                ser = serial.Serial(port, baudrate=115200, timeout=timeout)
 
-                    # Send query character and read response
-                    ser.write(RoboteqDriver._QRY_CHAR)
-                    response = ser.read()
+                # Clear any existing data
+                ser.reset_input_buffer()
 
-                    # Check if response is ACK
-                    if response == RoboteqDriver._ACK_CHAR:
-                        print(f"✓ Found Roboteq controller on {port}")
-                        available_ports.append(port)
+                # Send query character and read response
+                ser.write(RoboteqDriver._QRY_CHAR)
+                response = ser.read()
+
+                # Check if response is ACK
+                if response == RoboteqDriver._ACK_CHAR:
+                    print(f"{GREEN}✓ Found Roboteq controller on {port}{RESET}")
+                    available_connections.append(ser)  # Keep the connection open
+                else:
+                    # Not a Roboteq controller, close the connection
+                    ser.close()
 
             except (serial.SerialException, OSError):
                 # Skip ports that can't be opened
@@ -167,14 +176,40 @@ class RoboteqDriver:
 
         # Final summary
         print(
-            f"Serial port scan complete. Found {len(available_ports)} Roboteq controller(s)."
+            f"{GRAY}Serial port scan complete. Found {len(available_connections)} Roboteq controller(s).{RESET}"
         )
-        if available_ports:
-            print("Available controllers:")
-            for port in available_ports:
-                print(f"  - {port}")
 
-        return available_ports
+        return available_connections
+
+    @staticmethod
+    def probe_connection(connection, timeout=0.5):
+        """
+        Helper method to probe if a connection is to a Roboteq controller.
+
+        Args:
+            connection: Either socket.socket or serial.Serial connection object
+            timeout: Time to wait for response
+
+        Returns:
+            bool: True if the connection is to a Roboteq controller
+        """
+        try:
+            # Send query character and read response based on connection type
+            if isinstance(connection, serial.Serial):
+                connection.write(RoboteqDriver._QRY_CHAR)
+                response = connection.read()
+            elif isinstance(connection, socket.socket):
+                connection.sendall(RoboteqDriver._QRY_CHAR)
+                response = connection.recv(1)
+            else:
+                raise TypeError(
+                    "Connection must be either serial.Serial or socket.socket"
+                )
+
+            # Check if response is ACK
+            return response == RoboteqDriver._ACK_CHAR
+        except:
+            return False
 
     # ----------------------------------------------------------------------------------------------------
     #           Main functions
@@ -182,12 +217,13 @@ class RoboteqDriver:
 
     def __init__(
         self,
-        connection_type=CONN_SERIAL,
+        connect_using=CONN_SERIAL,
         com_port=None,
         host=None,
         tcp_port=9571,
         timeout=1,
         num_axis=1,
+        connected=False,
     ):
         """
         Initialize Roboteq driver controller with either serial or TCP connection
@@ -198,21 +234,22 @@ class RoboteqDriver:
             host (str): TCP host address (e.g., '192.168.1.10'), required for TCP
             tcp_port (int): TCP port number, default 9571
             timeout (float): Connection timeout in seconds
+            connected (bool): True if device acknowledged, False otherwise
 
         Raises:
             ValueError: If connection parameters are invalid or num_axis exceeds MAX_AXES
         """
 
         # Store connection type
-        self.connection_type = connection_type
+        self.connect_using = connect_using
 
         # Initialize connection based on type
-        if connection_type == self.CONN_SERIAL:
+        if connect_using == self.CONN_SERIAL:
             if not com_port:
                 raise ValueError("Serial port name is required for serial connection")
             self.connection = serial.Serial(com_port, baudrate=115200, timeout=timeout)
             self.connection_info = f"Serial port {com_port}"
-        elif connection_type == self.CONN_TCP:
+        elif connect_using == self.CONN_TCP:
             if not host:
                 raise ValueError("Host address is required for TCP connection")
             self.connection = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -220,7 +257,19 @@ class RoboteqDriver:
             self.connection.connect((host, tcp_port))
             self.connection_info = f"TCP {host}:{tcp_port}"
         else:
-            raise ValueError(f"Invalid connection type: {connection_type}")
+            raise ValueError(f"Invalid connection type: {connect_using}")
+
+        # Probe the connection with colored output
+        if not self.probe_connection(self.connection, timeout):
+            self.connected = False
+            print(
+                f"{YELLOW}Warning: Device at {self.connection_info} did not acknowledge connection{RESET}"
+            )
+        else:
+            self.connected = True
+            print(
+                f"{GREEN}Device at {self.connection_info} acknowledged connection{RESET}"
+            )
 
         # Check if number of axes is valid
         if num_axis < 1 or num_axis > self._MAX_AXES:
@@ -231,7 +280,9 @@ class RoboteqDriver:
         # Initialize dictionary to store linear movement configuration for each cc
         self.linear_config = {}
 
-        print(f"Connected to Roboteq controller via {self.connection_info}")
+        print(
+            f"{GREEN}Connected to Roboteq controller via {self.connection_info}{RESET}"
+        )
 
     def _send_data(self, data):
         """
@@ -240,10 +291,12 @@ class RoboteqDriver:
         Args:
             data (bytes): Data to send
         """
-        if self.connection_type == self.CONN_SERIAL:
+        if isinstance(self.connection, serial.Serial):
             self.connection.write(data)
-        else:  # TCP
+        elif isinstance(self.connection, socket.socket):
             self.connection.sendall(data)
+        else:
+            raise TypeError("Connection must be either serial.Serial or socket.socket")
 
     def _read_data(self):
         """
@@ -252,9 +305,9 @@ class RoboteqDriver:
         Returns:
             bytes: Received data
         """
-        if self.connection_type == self.CONN_SERIAL:
+        if isinstance(self.connection, serial.Serial):
             return self.connection.readline()
-        else:  # TCP
+        elif isinstance(self.connection, socket.socket):
             # For TCP, read until we get a newline
             data = b""
             while True:
@@ -263,6 +316,8 @@ class RoboteqDriver:
                     break
                 data += char
             return data + b"\n"
+        else:
+            raise TypeError("Connection must be either serial.Serial or socket.socket")
 
     def send_raw(self, str):
         """
@@ -274,7 +329,11 @@ class RoboteqDriver:
             str: Response from the controller
         """
 
-        to_send = f"{str}\r\n"
+        # Check if string already ends with \r\n
+        if str.endswith("\r\n"):
+            to_send = str
+        else:
+            to_send = f"{str}\r\n"
         self._send_data(to_send.encode())
         return self._read_data().decode().strip()
 
@@ -658,7 +717,7 @@ class RoboteqDriver:
     def __del__(self):
         """Cleanup when object is destroyed"""
         if hasattr(self, "connection"):
-            if self.connection_type == self.CONN_SERIAL:
+            if self.connect_using == self.CONN_SERIAL:
                 if self.connection.is_open:
                     self.connection.close()
             else:  # TCP
