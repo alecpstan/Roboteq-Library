@@ -8,12 +8,13 @@ import roboteq_manager
 def load_roboteq_devices_from_json(json_filename):
     """
     Load a list of RoboteqDriver objects from a JSON file.
+    Continues loading even if some device configurations are invalid.
 
     Args:
         json_filename (str): The filename of the JSON file to load.
 
     Returns:
-        list: A list of RoboteqDriver objects.
+        list: A list of successfully loaded RoboteqDriver objects.
     """
     # Get the directory of the current script
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -31,10 +32,14 @@ def load_roboteq_devices_from_json(json_filename):
 
     # Create RoboteqDriver objects from the loaded data
     devices = []
-    for device_data in devices_data:
-        # Use our custom function to create a RoboteqDriver from dict
-        device = _roboteq_driver_from_dict(device_data)
-        devices.append(device)
+
+    for i, device_data in enumerate(devices_data, 1):
+        try:
+            # Use our custom function to create a RoboteqDriver from dict
+            device = _roboteq_driver_from_dict(device_data)
+            devices.append(device)
+        except Exception as e:
+            pass
 
     return devices
 
@@ -129,7 +134,6 @@ def _roboteq_driver_from_dict(device_data):
         or config.get("num_axis")
         or device_data.get("num_axis", 1),
         "timeout": config.get("timeout") or device_data.get("timeout", 1.0),
-        "connected": False,  # Start as disconnected, will reconnect if needed
     }
 
     # Add connection-specific parameters

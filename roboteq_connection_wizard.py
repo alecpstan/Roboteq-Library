@@ -5,7 +5,7 @@ from pathlib import Path
 RED = "\033[91m"
 GREEN = "\033[92m"
 YELLOW = "\033[93m"
-GRAY = "\033[90m"
+GREY = "\033[90m"
 RESET = "\033[0m"  # Reset to default color
 
 import roboteq_manager  # Assumed to be in the same directory
@@ -30,9 +30,7 @@ def load_config():
             print(f"{YELLOW}No devices found in configuration.{RESET}")
             return []
 
-        print(
-            f"{GREEN}Successfully loaded {len(devices)} devices from configuration{RESET}"
-        )
+        print(f"{GREEN}Found {len(devices)} devices in configuration file{RESET}")
         return devices
 
     except FileNotFoundError:
@@ -56,19 +54,10 @@ def save_config(devices):
         print(f"{YELLOW}No devices to save.{RESET}")
         return
 
-    # Filter duplicates before saving
-    filtered_devices, removed_count = filter_duplicate_devices(devices)
-    if removed_count > 0:
-        print(
-            f"{YELLOW}Removed {removed_count} duplicate device(s) from configuration{RESET}"
-        )
-
     try:
         # Use the new JSON parser package to save devices
-        save_roboteq_devices_to_json(filtered_devices, "config.json")
-        print(
-            f"Configuration saved to config.json with {len(filtered_devices)} device(s)"
-        )
+        save_roboteq_devices_to_json(devices, "config.json")
+        print(f"Configuration saved to config.json with {len(devices)} device(s)")
     except Exception as e:
         print(f"{RED}Error saving configuration: {e}{RESET}")
 
@@ -164,40 +153,44 @@ def prompt_yes_no(question):
         print("Please answer with 'y' or 'n'.")
 
 
-def select_devices(connection_objects, device_type="tcp"):
+def select_devices(connection_objects):
     """
     Let user select devices from a list of connection objects.
 
     Args:
         connection_objects: List of connection objects (socket.socket or serial.Serial)
-        device_type: Type of device ("tcp" or "serial")
 
     Returns:
         list: List of selected connection objects
     """
+    import socket
+    import serial
+
     if not connection_objects:
         print(f"{YELLOW}No devices found.{RESET}")
         return []
 
     print("\nDiscovered devices:")
     for i, conn in enumerate(connection_objects, 1):
-        if device_type == "tcp":
+        if isinstance(conn, socket.socket):
             try:
                 host, port = conn.getpeername()
                 print(f"{i}. TCP {host}:{port}")
             except:
                 print(f"{i}. TCP connection (details unavailable)")
-        else:  # serial
+        elif isinstance(conn, serial.Serial):
             try:
                 port = conn.port
                 print(f"{i}. Serial port {port}")
             except:
                 print(f"{i}. Serial connection (details unavailable)")
+        else:
+            print(f"{i}. Unknown connection type: {type(conn).__name__}")
 
     while True:
         try:
             selections = input(
-                "\nEnter numbers of devices to connect (comma-separated) or 'all': "
+                "\nEnter numbers of devices to connect (comma-separated) or 'all'. Return to skip: "
             ).strip()
 
             if selections.lower() == "all":
@@ -216,18 +209,20 @@ def select_devices(connection_objects, device_type="tcp"):
             # Provide feedback on selected connections
             print(f"\nSelected {len(selected_connections)} connections:")
             for i, conn in enumerate(selected_connections, 1):
-                if device_type == "tcp":
+                if isinstance(conn, socket.socket):
                     try:
                         host, port = conn.getpeername()
                         print(f"{GREEN}✓{RESET} Selected TCP device at {host}:{port}")
                     except:
                         print(f"{GREEN}✓{RESET} Selected TCP device #{i}")
-                else:  # serial
+                elif isinstance(conn, serial.Serial):
                     try:
                         port = conn.port
                         print(f"{GREEN}✓{RESET} Selected serial device at {port}")
                     except:
                         print(f"{GREEN}✓{RESET} Selected serial device #{i}")
+                else:
+                    print(f"{GREEN}✓{RESET} Selected unknown device type #{i}")
 
             return selected_connections
 
@@ -238,7 +233,8 @@ def select_devices(connection_objects, device_type="tcp"):
 def filter_duplicate_devices(devices):
     """
     Filter out duplicate devices from the list.
-    A duplicate is defined as having the same connection type and IP/COM port.
+    A duplicate is defined as having the same port (serial) or host:port (TCP).
+    When duplicates are found, keeps the newer version (later in the list).
 
     Args:
         devices (list): List of RoboteqDriver objects
@@ -246,109 +242,37 @@ def filter_duplicate_devices(devices):
     Returns:
         tuple: (filtered_devices, removed_count)
     """
-    unique_devices = []
-    unique_signatures = set()
-    duplicates = []
+    # Reverse the list to keep the last occurrence of each device
+    devices.reverse()
+    # Use a set to track seen identifiers
+    seen = set()
+    filtered_devices = []
+    removed_count = 0
 
     for device in devices:
-        # Create a signature based on connection type and address
-        device_type = getattr(device, "type", None)
-
-        if not device_type and hasattr(device, "config"):
-            # Try to get type from config if available
-            device_type = device.config.get("type")
-
-        if device_type == "serial":
-            port = getattr(device, "port", None) or device.config.get("port")
-            signature = f"serial:{port}"
-        elif device_type == "tcp":
-            host = getattr(device, "host", None) or device.config.get("host")
-            port = getattr(device, "port", 9571) or device.config.get("port", 9571)
-            signature = f"tcp:{host}:{port}"
-        else:
-            # Unknown device types are kept but warned about
-            unique_devices.append(device)
-            name = getattr(device, "name", "Unnamed")
-            print(
-                f"{YELLOW}Warning: Unknown device type '{device_type}' for{RESET} {name}"
-            )
-            continue
-
-        # Check if we've seen this signature before
-        if signature in unique_signatures:
-            duplicates.append(device)
-        else:
-            unique_signatures.add(signature)
-            unique_devices.append(device)
-
-    # Return the filtered list and count of duplicates
-    return unique_devices, len(duplicates)
-
-
-def establish_connections(devices):
-    """Establish connections to the selected devices."""
-    connections = []
-    for device in devices:
-        try:
-            # Get common parameters
-            device_type = device.get("type")
-            timeout = device.get("timeout", 1.0)
-            num_axes = device.get("num_axes", 1)
-            name = device.get("name", "Unnamed")
-
-            if device_type == "serial":
-                # Connect using serial parameters
-                port = device.get("port")
-                if not port:
-                    print(f"{YELLOW}Missing port for serial device:{RESET} {name}")
-                    continue
-
-                connection = roboteq_manager.RoboteqDriver(
-                    connect_using="serial",
-                    com_port=port,
-                    timeout=float(timeout),
-                    num_axis=int(num_axes),
-                )
-                print(f"{GREEN}✓{RESET} Connected to {name} via serial port {port}")
-
-            elif device_type == "tcp":
-                # Connect using TCP parameters
-                host = device.get("host")
-                port = device.get("port")
-                if not host:
-                    print(f"{YELLOW}Missing host address for TCP device:{RESET} {name}")
-                    continue
-
-                connection = roboteq_manager.RoboteqDriver(
-                    connect_using="tcp",
-                    host=host,
-                    tcp_port=int(port),
-                    timeout=float(timeout),
-                    num_axis=int(num_axes),
-                )
-                print(f"{GREEN}✓{RESET} Connected to {name} via TCP at {host}:{port}")
-
+        if isinstance(device, roboteq_manager.RoboteqDriver):
+            # Extract connection details
+            conn_type = device.config.get("type")
+            if conn_type == "serial":
+                identifier = device.config.get("port")
+            elif conn_type == "tcp":
+                host = device.config.get("host")
+                port = device.config.get("port")
+                identifier = f"{host}:{port}"
             else:
-                print(f"Unknown device type: {device_type} for device {name}")
-                continue
+                identifier = None
 
-            connections.append(
-                {"device": device, "connection": connection, "name": name}
-            )
+            # Check for duplicates
+            if identifier in seen:
+                removed_count += 1
+            else:
+                seen.add(identifier)
+                filtered_devices.append(device)
 
-        except Exception as e:
-            print(
-                f"{RED}✗{RESET} Error connecting to {device.get('name', 'Unnamed')}: {str(e)}"
-            )
+    # Reverse back to original order
+    filtered_devices.reverse()
 
-    if connections:
-        print(
-            f"\nSuccessfully established {len(connections)} of {len(devices)} connections"
-        )
-    else:
-        print("\nFailed to establish any connections")
-
-    return connections
+    return filtered_devices, removed_count
 
 
 def print_devices_with_status(devices):
@@ -362,9 +286,9 @@ def print_devices_with_status(devices):
         print("No devices configured.")
         return
 
-    print(f"\n{GRAY}" + "=" * 90 + f"{RESET}")
-    print(f"{GRAY}" + " DEVICE STATUS ".center(90, "=") + f"{RESET}")
-    print(f"{GRAY}" + "=" * 90 + f"{RESET}")
+    print(f"\n{GREY}" + "=" * 90 + f"{RESET}")
+    print(f"{GREY}" + " DEVICE STATUS ".center(90, "=") + f"{RESET}")
+    print(f"{GREY}" + "=" * 90 + f"{RESET}")
 
     # Determine the longest device name for formatting
     max_name_len = max(
@@ -403,16 +327,15 @@ def print_devices_with_status(devices):
         # Check connection status
         status = f"{RED}✗{RESET}"  # Default to error (not connected)
         try:
-            # Check if connection attribute exists and is not None
-            if hasattr(device, "connection") and device.connection:
+            # Check connection status
+            if device.connected and device.connection:
                 # Try a simple operation to confirm connection is alive
                 if hasattr(device, "send_raw"):
                     device.send_raw("~FLTFLAG")
                     status = f"{GREEN}✓{RESET}"
                     connected_count += 1
-            elif hasattr(device, "connected") and device.connected:
-                status = f"{GREEN}✓{RESET}"
-                connected_count += 1
+            else:
+                status = f"{RED}✗{RESET}"
         except:
             status = f"{RED}✗{RESET}"
 
@@ -421,15 +344,15 @@ def print_devices_with_status(devices):
             f"{i:<3} | {name:<{max_name_len}} | {num_axes:<4} | {conn_details:<40} | {device_type:<8} | {status:^6}"
         )
 
-    print(f"{GRAY}" + "=" * 90 + f"{RESET}")
+    print(f"{GREY}" + "=" * 90 + f"{RESET}")
     print(
-        f"{GRAY}"
+        f"{GREY}"
         + f" {connected_count} of {len(devices)} devices connected successfully ".center(
             90, "="
         )
         + f"{RESET}"
     )
-    print(f"{GRAY}" + "=" * 90 + f"{RESET}")
+    print(f"{GREY}" + "=" * 90 + f"{RESET}")
     print()
 
 
@@ -447,20 +370,17 @@ def create_driver_from_connection(conn, custom_name=None, num_axis=None):
 
     Raises:
         TypeError: If connection is not socket.socket or serial.Serial
-        Exception: If connection details cannot be extracted
     """
     import socket
     import serial
 
-    # Check connection type and extract details
+    # Check connection type and extract details for display
     if isinstance(conn, socket.socket):
         # Handle TCP connection
         try:
             host, port = conn.getpeername()
             connection_info = f"TCP device at {host}:{port}"
             default_name = f"TCP_{host.split('.')[-1]}"
-            connection_type = roboteq_manager.RoboteqDriver.CONN_TCP
-            connection_args = {"host": host, "tcp_port": port}
             config_type = "tcp"
             config_details = {"host": host, "port": port}
         except Exception as e:
@@ -474,8 +394,6 @@ def create_driver_from_connection(conn, custom_name=None, num_axis=None):
             port = conn.port
             connection_info = f"serial device at {port}"
             default_name = f"Serial_{port.split('/')[-1]}"
-            connection_type = roboteq_manager.RoboteqDriver.CONN_SERIAL
-            connection_args = {"com_port": port}
             config_type = "serial"
             config_details = {"port": port}
         except Exception as e:
@@ -507,13 +425,12 @@ def create_driver_from_connection(conn, custom_name=None, num_axis=None):
             except ValueError:
                 print("Please enter a valid number.")
 
-    # Create RoboteqDriver object with common and connection-specific args
+    # Create RoboteqDriver object directly using the connection object
     device = roboteq_manager.RoboteqDriver(
-        connect_using=connection_type, num_axis=axes, **connection_args
+        connection=conn, num_axis=axes, name=name  # Pass the connection object directly
     )
 
-    # Add name and config for saving
-    device.name = name
+    # Add config for saving
     device.config = {
         "type": config_type,
         "name": name,
@@ -526,22 +443,35 @@ def create_driver_from_connection(conn, custom_name=None, num_axis=None):
         f"{GREEN}✓{RESET} Created driver '{name}' with {axes} axes for {connection_info}"
     )
 
-    # Close the original connection as we now have a RoboteqDriver
-    try:
-        conn.close()
-    except:
-        print(f"{YELLOW}Warning: Could not close original connection for {name}{RESET}")
+    # We no longer need to close the original connection as the driver will use it
+    # The old connection is now managed by the RoboteqDriver
 
     return device
 
 
 def main():
-    print(f"{GRAY}======================================={RESET}")
-    print(f"{GRAY}      Roboteq Motor Driver Manager {RESET}")
-    print(f"{GRAY}======================================={RESET}")
+    print(f"{GREY}======================================={RESET}")
+    print(f"{GREY}      Roboteq Connection Wizard {RESET}")
+    print(f"{GREY}======================================={RESET}")
 
     # Load existing devices - these are already RoboteqDriver objects with connections
-    devices = load_config()
+    print(f"Loading existing devices...")
+    existing_devices = load_config()
+
+    # Create a list of connections from the loaded devices
+    existing_connections = []
+    for device in existing_devices:
+        # Simply get the connection attribute, even if None
+        if hasattr(device, "connection"):
+            existing_connections.append(device.connection)
+            if device.connection:
+                print(
+                    f"{GREEN}✓{RESET} Found existing connection for {device.name} on {device.connection_info}"
+                )
+            else:
+                print(f"{RED}✗ {YELLOW}No active connection for {device.name}{RESET}")
+        else:
+            print(f"{YELLOW}No connection attribute for {device.name}{RESET}")
 
     # Scan TCP for new devices
     tcp_devices = []
@@ -549,7 +479,7 @@ def main():
         tcp_connections = scan_tcp_devices()  # This now returns socket objects
         if tcp_connections:
             print(f"{GREEN}Found {len(tcp_connections)} TCP devices.{RESET}")
-            selected_tcp_connections = select_devices(tcp_connections, "tcp")
+            selected_tcp_connections = select_devices(tcp_connections)
 
             # Convert socket connections into RoboteqDriver objects
             for conn in selected_tcp_connections:
@@ -563,7 +493,7 @@ def main():
                     )
         else:
             print(f"{YELLOW}No TCP devices found.{RESET}")
-    print(f"{GRAY}----------------------------------------{RESET}")
+    print(f"{GREY}----------------------------------------{RESET}")
 
     # Scan COM ports
     com_devices = []
@@ -571,7 +501,7 @@ def main():
         com_connections = scan_com_ports()  # This now returns serial objects
         if com_connections:
             print(f"{GREEN}Found {len(com_connections)} COM port devices.{RESET}")
-            selected_com_connections = select_devices(com_connections, "serial")
+            selected_com_connections = select_devices(com_connections)
 
             # Convert serial connections into RoboteqDriver objects
             for conn in selected_com_connections:
@@ -585,10 +515,10 @@ def main():
                     )
         else:
             print(f"{YELLOW}No COM port devices found.{RESET}")
-    print(f"{GRAY}----------------------------------------{RESET}")
+    print(f"{GREY}----------------------------------------{RESET}")
 
     # Merge all devices (existing and newly found)
-    all_devices = devices + tcp_devices + com_devices
+    all_devices = existing_devices + tcp_devices + com_devices
 
     # Save the configuration
     if all_devices:
@@ -596,21 +526,89 @@ def main():
         filtered_devices, removed_count = filter_duplicate_devices(all_devices)
         if removed_count > 0:
             print(
-                f"{YELLOW}Removed {removed_count} duplicate device(s) from configuration{RESET}"
+                f"{YELLOW}Removed {removed_count} duplicate device(s) from configuration{RESET}, keeping the newer version(s)."
             )
-
-        # Save the filtered devices
-        save_config(filtered_devices)
 
         # Update our working list to the filtered list
         all_devices = filtered_devices
     else:
         print(f"{YELLOW}No devices to save.{RESET}")
         return
-    print(f"{GRAY}----------------------------------------{RESET}")
+    print(f"{GREY}----------------------------------------{RESET}")
 
     # Display all devices with connection status
     print_devices_with_status(all_devices)
+
+    # Check if there are any disconnected devices
+    disconnected_devices = []
+    for device in all_devices:
+        if not (hasattr(device, "connection") and device.connection):
+            disconnected_devices.append(device)
+
+    # Ask if user wants to delete disconnected devices
+    if disconnected_devices and prompt_yes_no(
+        "Would you like to remove disconnected devices from configuration?"
+    ):
+        print(f"\n{YELLOW}The following devices are disconnected:{RESET}")
+        for i, device in enumerate(disconnected_devices, 1):
+            name = getattr(device, "name", f"Device {i}")
+            config = getattr(device, "config", {})
+
+            # Show device details
+            if config.get("type") == "serial":
+                details = f"Port: {config.get('port', 'unknown')}"
+            elif config.get("type") == "tcp":
+                details = (
+                    f"Host: {config.get('host', 'unknown')}:{config.get('port', 9571)}"
+                )
+            else:
+                details = "Unknown connection type"
+
+            print(f"{i}. {name} - {details}")
+
+        # Let user select which devices to remove
+        while True:
+            try:
+                selections = input(
+                    f"\n{YELLOW}Enter numbers of devices to remove (comma-separated) or 'all'. Return to keep all:{RESET} "
+                ).strip()
+
+                if not selections:
+                    print(f"{GREEN}Keeping all devices in configuration{RESET}")
+                    break
+
+                if selections.lower() == "all":
+                    # Remove all disconnected devices
+                    all_devices = [
+                        d for d in all_devices if d not in disconnected_devices
+                    ]
+                    print(
+                        f"{GREEN}Removed all disconnected devices from configuration{RESET}"
+                    )
+                    break
+                else:
+                    indices = [
+                        int(x.strip()) - 1 for x in selections.split(",") if x.strip()
+                    ]
+                    if not all(0 <= idx < len(disconnected_devices) for idx in indices):
+                        print("Invalid selection. Please enter valid device numbers.")
+                        continue
+
+                    # Get devices to remove
+                    to_remove = [disconnected_devices[idx] for idx in indices]
+
+                    # Remove selected devices
+                    all_devices = [d for d in all_devices if d not in to_remove]
+                    print(
+                        f"{GREEN}Removed {len(to_remove)} device(s) from configuration{RESET}"
+                    )
+                    break
+
+            except ValueError:
+                print("Please enter numbers separated by commas.")
+
+    # Save the configuration to JSON
+    save_config(all_devices)
 
     if all_devices:
         print("Devices ready for use.")
@@ -618,14 +616,41 @@ def main():
         # Import and run the user program
         # ... (code to import and run user program)
 
-        # Clean up connections when done
+        # Close all connections
+        import serial
+        import socket
+
         for device in all_devices:
-            try:
-                if hasattr(device, "connection") and device.connection:
-                    if hasattr(device.connection, "close"):
-                        device.connection.close()
-            except:
-                pass
+            if device.connected:
+                try:
+                    # Check if device has a connection attribute and it's not None
+                    if hasattr(device, "connection") and device.connection is not None:
+                        # Check what type of connection it is
+                        conn = device.connection
+
+                        if isinstance(conn, serial.Serial):
+                            conn.close()
+                            print(
+                                f"{GREEN}✓{RESET} Closed serial connection for {device.name}"
+                            )
+                        elif isinstance(conn, socket.socket):
+                            conn.close()
+                            print(
+                                f"{GREEN}✓{RESET} Closed TCP connection for {device.name}"
+                            )
+                        else:
+                            print(
+                                f"{YELLOW}Unknown connection type for {device.name}: {type(conn)}{RESET}"
+                            )
+                    else:
+                        # No valid connection to close
+                        print(f"{YELLOW}No active connection for {device.name}{RESET}")
+
+                except Exception as e:
+                    print(
+                        f"{RED}Error closing connection for {device.name}: {str(e)}{RESET}"
+                    )
+
     else:
         print("No devices available.")
 

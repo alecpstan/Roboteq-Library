@@ -5,10 +5,12 @@ import time
 import sys
 from commands import Command, Query, Config
 from json_parser import *
+import serial
+import socket
 
 # ANSI color codes for terminal output
 RESET = "\033[0m"
-GRAY = "\033[90m"
+GREY = "\033[90m"
 GREEN = "\033[92m"
 RED = "\033[91m"
 YELLOW = "\033[93m"
@@ -49,9 +51,9 @@ class RoboteqDriver:
         end = int(start_end) if "-" in host_range else start
 
         # Provide initial feedback
-        print(f"{GRAY}Scanning TCP/IP range {host_range} on port {port}...{RESET}")
+        print(f"{GREY}Scanning TCP/IP range {host_range} on port {port}...{RESET}")
         print(
-            f"{GRAY}This will check {end - start + 1} addresses with a {timeout}s timeout each{RESET}"
+            f"{GREY}This will check {end - start + 1} addresses with a {timeout}s timeout each{RESET}"
         )
 
         # Track progress
@@ -96,7 +98,7 @@ class RoboteqDriver:
 
         # Final summary
         print(
-            f"{GREEN}TCP scan complete. Found {len(available_connections)} Roboteq controller(s).{RESET}"
+            f"{GREY}TCP scan complete. Found {len(available_connections)} Roboteq controller(s).{RESET}"
         )
 
         return available_connections
@@ -130,7 +132,7 @@ class RoboteqDriver:
             raise OSError("Unsupported platform")
 
         print(
-            f"{GRAY}Found {len(ports)} potential ports to check with {timeout}s timeout each{RESET}"
+            f"{GREY}Found {len(ports)} potential ports to check with {timeout}s timeout each{RESET}"
         )
 
         # Track progress
@@ -176,7 +178,7 @@ class RoboteqDriver:
 
         # Final summary
         print(
-            f"{GREEN}Serial port scan complete. Found {len(available_connections)} Roboteq controller(s).{RESET}"
+            f"{GREY}Serial port scan complete. Found {len(available_connections)} Roboteq controller(s).{RESET}"
         )
 
         return available_connections
@@ -217,72 +219,134 @@ class RoboteqDriver:
 
     def __init__(
         self,
+        connection=None,  # Pass an existing connection object if available
         connect_using=CONN_SERIAL,
         com_port=None,
         host=None,
         tcp_port=9571,
-        timeout=1,
+        timeout=0.5,
+        name="Unnamed",
         num_axis=1,
-        connected=False,
     ):
         """
         Initialize Roboteq driver controller with either serial or TCP connection
 
         Args:
-            connection_type (str): Type of connection - 'serial' or 'tcp'
-            com_port (str): Serial port name (e.g., 'COM1' or '/dev/ttyUSB0'), required for serial
-            host (str): TCP host address (e.g., '192.168.1.10'), required for TCP
-            tcp_port (int): TCP port number, default 9571
+            connection (object, optional): Existing connection object (serial.Serial or socket.socket)
+            connect_using (str, optional): Type of connection - 'serial' or 'tcp'
+            com_port (str, conditional): Serial port name (e.g., 'COM1' or '/dev/ttyUSB0'), required for serial
+            host (str, conditional): TCP host address (e.g., '192.168.1.10'), required for TCP
+            tcp_port (int, conditional): TCP port number, default 9571
             timeout (float): Connection timeout in seconds
-            connected (bool): True if device acknowledged, False otherwise
-
-        Raises:
-            ValueError: If connection parameters are invalid or num_axis exceeds MAX_AXES
+            name (str): Name of the device
+            num_axis (int): Number of axes (1-3)
         """
-
-        # Store connection type
-        self.connect_using = connect_using
-
-        # Initialize connection based on type
-        if connect_using == self.CONN_SERIAL:
-            if not com_port:
-                raise ValueError("Serial port name is required for serial connection")
-            self.connection = serial.Serial(com_port, baudrate=115200, timeout=timeout)
-            self.connection_info = f"Serial port {com_port}"
-        elif connect_using == self.CONN_TCP:
-            if not host:
-                raise ValueError("Host address is required for TCP connection")
-            self.connection = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.connection.settimeout(timeout)
-            self.connection.connect((host, tcp_port))
-            self.connection_info = f"TCP {host}:{tcp_port}"
-        else:
-            raise ValueError(f"Invalid connection type: {connect_using}")
-
-        # Probe the connection with colored output
-        if not self.probe_connection(self.connection, timeout):
-            self.connected = False
-            print(
-                f"{YELLOW}Warning: Device at {self.connection_info} did not acknowledge connection{RESET}"
-            )
-        else:
-            self.connected = True
-            print(
-                f"{GREEN}Device at {self.connection_info} acknowledged connection{RESET}"
-            )
-
-        # Check if number of axes is valid
-        if num_axis < 1 or num_axis > self._MAX_AXES:
-            raise ValueError(f"Number of axes must be between 1 and {self._MAX_AXES}")
+        # Store basic properties
+        self.name = name
         self.num_axis = num_axis
-        self.timeout = timeout
+        self.connection_info = None  # Default to failed until proven otherwise
+        self.connected = False
 
-        # Initialize dictionary to store linear movement configuration for each cc
-        self.linear_config = {}
+        try:
+            # If a connection object is provided, use it instead of creating a new one
+            if connection is not None:
+                # Check if the connection is a serial or TCP socket
+                if isinstance(connection, serial.Serial):
+                    self.connection = connection
+                    self.connect_using = self.CONN_SERIAL
+                    self.connection_info = f"Serial port {connection.port}"
+                elif isinstance(connection, socket.socket):
+                    self.connection = connection
+                    self.connect_using = self.CONN_TCP
+                    try:
+                        host, port = connection.getpeername()
+                        self.connection_info = f"TCP {host}:{port}"
+                    except:
+                        self.connection_info = "TCP (details unavailable)"
+                else:
+                    print(
+                        f"{YELLOW}Warning: Connection object type not recognized{RESET}"
+                    )
+                    self.connection = None
+                    return  # Object created but not connected
+            else:
+                # Initialize connection based on type
+                if connect_using == self.CONN_SERIAL:
+                    if not com_port:
+                        print(
+                            f"{YELLOW}Warning: Serial port name is required for serial connection{RESET}"
+                        )
+                        return  # Object created but not connected
 
-        print(
-            f"{GREEN}Connected to Roboteq controller via {self.connection_info}{RESET}"
-        )
+                    try:
+                        self.connection = serial.Serial(
+                            com_port, baudrate=115200, timeout=timeout
+                        )
+                        self.connection_info = f"Serial port {com_port}"
+                    except (serial.SerialException, OSError) as e:
+                        print(
+                            f"{YELLOW}Warning: Failed to connect to serial port {com_port}: {str(e)}{RESET}"
+                        )
+                        self.connection = None
+                        return  # Object created but not connected
+
+                elif connect_using == self.CONN_TCP:
+                    if not host:
+                        print(
+                            f"{YELLOW}Warning: Host address is required for TCP connection{RESET}"
+                        )
+                        return  # Object created but not connected
+
+                    try:
+                        self.connection = socket.socket(
+                            socket.AF_INET, socket.SOCK_STREAM
+                        )
+                        self.connection.settimeout(timeout)
+                        self.connection.connect((host, tcp_port))
+                        self.connection_info = f"TCP {host}:{tcp_port}"
+                    except (socket.error, socket.timeout) as e:
+                        print(
+                            f"{YELLOW}Warning: Failed to connect to TCP {host}:{tcp_port}: {str(e)}{RESET}"
+                        )
+                        self.connection = None
+                        return  # Object created but not connected
+                else:
+                    print(
+                        f"{YELLOW}Warning: Invalid connection type: {connect_using}{RESET}"
+                    )
+                    self.connection = None
+                    return  # Object created but not connected
+
+            # Probe the connection with colored output
+            if self.probe_connection(self.connection, timeout):
+                print(
+                    f"{GREEN}Device at {self.connection_info} acknowledged connection{RESET}"
+                )
+                self.connected = True  # Connection exists and is a Roboteq device
+            else:
+                print(
+                    f"{YELLOW}Warning: Device at {self.connection_info} did not acknowledge connection{RESET}"
+                )
+                self.connected = False  # Connection exists but not a Roboteq device, or some other error
+
+            # Check if number of axes is valid
+            if num_axis < 1 or num_axis > self._MAX_AXES:
+                print(
+                    f"{YELLOW}Warning: Number of axes must be between 1 and {self._MAX_AXES}{RESET}"
+                )
+                num_axis = 1  # Set to safe default
+
+            self.num_axis = num_axis
+
+            # Initialize dictionary to store linear movement configuration for each axis
+            self.linear_config = {}
+
+        except Exception as e:
+            # Catch any other exceptions
+            print(f"{RED}Error during connection initialization: {str(e)}{RESET}")
+            self.connection = None
+            self.connected = False
+            # self.connection_info = "None"
 
     def _send_data(self, data):
         """
@@ -716,9 +780,17 @@ class RoboteqDriver:
 
     def __del__(self):
         """Cleanup when object is destroyed"""
-        if hasattr(self, "connection"):
-            if self.connect_using == self.CONN_SERIAL:
-                if self.connection.is_open:
-                    self.connection.close()
-            else:  # TCP
-                self.connection.close()
+        if self.connected and self.connection != None:
+            if hasattr(self, "connection"):
+                if isinstance(self.connection, serial.Serial):
+                    # Close the serial connection
+                    if self.connection.is_open:
+                        self.connection.close()
+                elif isinstance(self.connection, socket.socket):
+                    # Close the TCP connection
+                    try:
+                        self.connection.shutdown(socket.SHUT_RDWR)
+                        self.connection.close()
+                    except:
+                        # Handle case where connection might already be closed
+                        pass

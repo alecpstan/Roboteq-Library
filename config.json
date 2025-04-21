@@ -1,9 +1,9 @@
 [
     {
         "type": "serial",
-        "name": "Device1",
+        "name": "Dev3",
         "num_axes": 1,
-        "timeout": 1,
+        "timeout": 1.0,
         "port": "/dev/tty.usbmodemSBL1XXX1"
     }
 ]
