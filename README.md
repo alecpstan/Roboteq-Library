@@ -5,49 +5,48 @@ A comprehensive Python library for controlling Roboteq motor controllers through
 ## File Overview
 
 ### roboteq_manager.py
-This is the core driver class that provides direct communication with Roboteq motor controllers.
+Core driver class that handles communication with Roboteq motor controllers.
 
-- Establishes and manages connections via serial or TCP
+- Manages connections via serial or TCP
 - Sends commands and queries to the controller
-- Implements linear motion control features with position tracking
-- Provides homing functionality for precise positioning
-- Auto-discovers devices on networks and serial ports
+- Implements motion control features with position tracking
+- Provides homing functionality
+- Discovers devices across networks and serial ports
 
 ### commands.py
-Contains structured definitions of all available controller commands organized into classes:
+Defines structured controller commands organized into classes:
 
-- **Command**: Runtime control commands (speed control, position control, etc.)
-- **Query**: Feedback and status reading commands
+- **Command**: Runtime control commands for motors
+- **Query**: Status and feedback information requests
 - **Config**: Configuration parameters for controller settings
 
 ### start_roboteq.py
-The main application entry point that manages device connections:
+Application entry point for device connection management:
 
-- Scans for available devices on serial ports and network
-- Loads and saves device configurations to a JSON file
-- Establishes connections to configured devices
-- Provides a command-line interface for device management
-- Handles device discovery and connection workflows
+- Scans for available devices
+- Manages device configurations via JSON file
+- Establishes connections to controllers
+- Provides interface for device management
 
 ### user_program.py
-Contains the logic for running custom control sequences on connected devices:
+Framework for implementing custom control sequences:
 
-- Provides a framework to execute user-defined motor control programs
-- Includes helper functions to find devices by name
-- Demonstrates proper usage of the driver API
+- Executes user-defined motor control programs
+- Contains helper functions for device management
+- Demonstrates API usage patterns
 
 ## Getting Started
 
 1. Run `start_roboteq.py` to scan for and configure controllers
-2. The program will save device configurations to `config.json`
+2. Device configurations will be saved to `config.json`
 3. Create custom control sequences in `user_program.py`
-4. Connect to your devices and start controlling your motors
+4. Connect to your devices and control your motors
 
 ## Connection Types
 
 The library supports two connection methods:
 
-- **Serial**: Direct USB or RS232 connection to the controller
+- **Serial**: Direct USB or RS232 connection
 - **TCP**: Network connection to controllers with Ethernet capability
 
 ## Example Usage

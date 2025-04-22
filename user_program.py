@@ -31,10 +31,10 @@ def start_user_program(devices: List[RoboteqDriver]):
     Driver1 = device_by_name("Driver1", devices)
 
     # -----------------------------------------
-    #               Your program
+    #               Example program
     # -----------------------------------------
-    devices[Driver1].send_raw("!RST")  # First command doesnt respond
-    devices[Driver1].send_raw("?FID")
+    devices[Driver1].send_raw("!RST")  # First command doesnt respond, just do this
+    devices[Driver1].send_raw("?FID")  # Get the firmware ID
 
     # Start with some linear configuration including homing
     devices[Driver1].linear_configure(axis=1, mm_per_rev=25, min_mm=0, max_mm=5000)
@@ -43,24 +43,22 @@ def start_user_program(devices: List[RoboteqDriver]):
     # Setup acceleration and deceleration
     devices[Driver1].send(Command.SET_ACCELERATION, cc=1, nn=1000)
     devices[Driver1].send(Command.SET_DECELERATION, cc=1, nn=1000)
-    # Move to 500mm using linear motion
+
+    # Run through your program loop.
+    # E.g. Move to 500mm using linear motion
     devices[Driver1].linear_move_absolute_mm(
         axis=1, position_mm=500, speed=500, wait=True
     )
 
-    # Setup done, set speed to operating speed
-    # devices[Driver1].send(Command.SET_SPEED, cc=1, nn=2000)
-    # devices[Driver1].send(Command.GO_TO_POSITION, cc=1, nn=2000000)
+    # E.g. Move to 500mm using linear motion
+    devices[Driver1].linear_move_absolute_mm(
+        axis=1, position_mm=1000, speed=500, wait=True
+    )
 
-    # Loops while mf = 0
-    # mf = "DR=0"
-    # while mf == "DR=0":
-    #    mf = devices[Driver1].send(Query.GET_DESTINATION_REACHED, cc=1, nn=0)
+    # TODO: Example of how to use the query function
+    # TODO: Example of how to use DIO
+    # TODO: Example of how to query the device
 
-    # devices[Driver1].send(Command.SET_SPEED, cc=1, nn=3000)
-    # devices[Driver1].send(Command.GO_TO_POSITION, cc=1, nn=-2000000)
-
-    # Stop all devices
     devices[Driver1].send(Command.STOP_ALL, 1)
 
     return None
