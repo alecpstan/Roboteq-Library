@@ -371,6 +371,7 @@ class RoboteqDriver:
         """
         if isinstance(self.connection, serial.Serial):
             return self.connection.readline()
+
         elif isinstance(self.connection, socket.socket):
             # For TCP, read until we get a newline
             data = b""
@@ -383,71 +384,22 @@ class RoboteqDriver:
         else:
             raise TypeError("Connection must be either serial.Serial or socket.socket")
 
-    def send_raw(self, str, ignore_echo=True):
-        """
-        Send raw string to the Roboteq controller
-
-        Args:
-            str (str): Command string to send
-        Returns:
-            str: Response from the controller
-        """
-
-        # Check if string already ends with \r
-        if str.endswith("\r"):
-            to_send = str
-        else:
-            to_send = f"{str}\r"
-        self._send_data(to_send.encode())
-        # Wait for response
-        response = self._read_data().decode().strip()
-        # if ignore_echo, split at \r and take the last part
-        if ignore_echo:
-            response = response.split("\r")[-1]
-        response = response.replace("\r", "\r\n")
-
-        # Check for error response
-        if response == "-":
-            # Raise error without color codes to avoid issues with exception handling
-            raise ValueError(f"Command {to_send} failed")
-        else:
-            # Check if response is a valid command
-            print(
-                f"Command sent: {to_send.strip()}  {GREY}Response: {response.strip()}{RESET}"
-            )
-
-        return response
-
-    def send(self, send_str, cc=None, nn=None, mm=None, ee=None, set=False):
-        """
-        Send a runtime command to the controller
-
-        Args:
-            send_str (str): Command string
-            cc (int or str): Usually Axis number (default: 1)
-            nn (int, optional): Value for command if required
-            set (bool): If True, command will set the config value (default: False). Ignored if not Config command
-
-        Returns:
-            str: Response from controller ('+' for success)
-
-        Raises:
-            ValueError: If command not in command class or command fails
-        """
+    def _format_string(self, input_str, cc=None, nn=None, mm=None, ee=None, set=False):
         # Determine which command type and set prefix accordingly
-        if send_str in vars(Command).values():
+        if input_str in vars(Command).values():
             prefix = "!"
-        elif send_str in vars(Query).values():
+        elif input_str in vars(Query).values():
             prefix = "?"
-        elif send_str in vars(Config).values():
+        elif input_str in vars(Config).values():
             prefix = "^" if set else "~"
         else:
-            raise ValueError(
-                f"Invalid command: {send_str}. Must be a command from Command, Query, or Config classes"
-            )
+            # If the command does not start with !, ?, ^, or ~ raise an error
+            if not input_str.startswith(("!", "?", "^", "~")):
+                raise ValueError(f"Command '{input_str}' not recognized")
+            prefix = ""
 
         # Create the initial command string with the appropriate prefix
-        formatted_str = f"{prefix}{send_str}\r"
+        formatted_str = f"{prefix}{input_str}\r"
 
         # Replace cc with its value if present in the string
         if cc is not None:
@@ -465,8 +417,85 @@ class RoboteqDriver:
         if ee is not None:
             formatted_str = formatted_str.replace("ee", str(ee))
 
+        return formatted_str
+
+    def send_raw(self, str, mute_echo=True, mute_feedback=False, mute_debug=False):
+        """
+        Send raw string to the Roboteq controller
+
+        Args:
+            str (str): Command string to send
+        Returns:
+            str: Response from the controller
+        """
+        # Check if string already ends with \r
+        if str.endswith("\r"):
+            to_send = str
+        else:
+            to_send = f"{str}\r"
+        self._send_data(to_send.encode())
+        # Wait for response
+        response = self._read_data().decode().strip()
+        # if ignore_echo, split at \r and take the last part
+        if mute_echo:
+            response = response.split("\r")[-1]
+        response = response.replace("\r", "\r\n")
+
+        # Check for error response
+        if response == "-":
+            # Raise error without color codes to avoid issues with exception handling
+            raise ValueError(f"Command {to_send} failed")
+        else:
+            # Check if response is a valid command if not muted
+            if not mute_feedback and not mute_debug:
+                # Print the command and response with color codes
+                print(
+                    f"Command sent: {to_send.strip()}  {GREY}Response: {response.strip()}{RESET}"
+                )
+
+        return response
+
+    def send(
+        self,
+        send_str,
+        cc=None,
+        nn=None,
+        mm=None,
+        ee=None,
+        set=False,
+        mute_feedback=False,
+        mute_echo=True,
+        mute_debug=False,
+    ):
+        """
+        Send a runtime command to the controller
+
+        Args:
+            send_str (str): Command string
+            cc (int or str): Usually Axis number (default: 1)
+            nn (int, optional): Value for command if required
+            set (bool): If True, command will set the config value (default: False). Ignored if not Config command
+
+        Returns:
+            str: Response from controller ('+' for success)
+
+        Raises:
+            ValueError: If command not in command class or command fails
+        """
+        formatted_str = self._format_string(
+            send_str, cc=cc, nn=nn, mm=mm, ee=ee, set=set
+        )
+
         # Use send_raw to handle sending the command
-        response = self.send_raw(formatted_str)
+        response = self.send_raw(
+            formatted_str,
+            mute_echo=mute_echo,
+            mute_debug=mute_debug,
+            mute_feedback=mute_feedback,
+        )
+        # If feedback is muted, send "?" as the response
+        if mute_feedback:
+            response = "?"
 
         return response
 
@@ -507,6 +536,129 @@ class RoboteqDriver:
         except (IndexError, ValueError):
             raise ValueError(f"Invalid response format: {response}")
 
+    def is_position_reached(self, axis):
+        """
+        Wait until the motor reaches its target position.
+
+        Args:
+            axis (int): Axis number (1- axis count)
+
+        Returns:
+            bool: Returns True when position is reached
+        """
+        # Check if position is reached
+        dr_response = self.send(
+            Query.GET_DESTINATION_REACHED, cc=axis, mute_debug=True, mute_echo=True
+        )
+
+        # Parse response
+        destination_reached = int(self.extract_value(dr_response))
+        return destination_reached == 1
+
+    def wait_for_position_reached(self, axis):
+        """
+        Wait until the motor(s) reach their target position.
+
+        Args:
+            axis: Either a single axis number (int) or a list of axis numbers (1-max axis)
+
+        Returns:
+            bool: Returns True when all specified axes reach their position
+        """
+        # Convert single axis to list for uniform processing
+        axes = [axis] if isinstance(axis, int) else list(axis)
+
+        # Validate axes
+        for ax in axes:
+            if not isinstance(ax, int) or ax < 1 or ax > self._MAX_AXES:
+                raise ValueError(
+                    f"Invalid axis value: {ax}. Must be an integer between 1 and {self._MAX_AXES}."
+                )
+
+        print(
+            f"{YELLOW}{self.name} waiting for axis/axes {', '.join(map(str, axes))} to reach target position(s)...{RESET}"
+        )
+
+        dots = 0
+
+        while True:
+            # Check if all positions are reached
+            all_reached = True
+            for ax in axes:
+                if not self.is_position_reached(ax):
+                    all_reached = False
+                    break
+
+            if all_reached:
+                print(f"{GREEN}✓ All positions reached{RESET}")
+                return True
+
+            # Visual feedback
+            dots = (dots + 1) % 4
+            print(f"{GREY}Waiting{'.' * dots}{' ' * 20}{RESET}\r", end="", flush=True)
+            time.sleep(0.1)  # Small delay to prevent CPU overuse
+
+    def send_batch(self, commands_list, mute_feedback=True):
+        """
+        Send multiple commands as a single string with \r delimiters.
+
+        Args:
+            commands_list (list): List of command specifications, each a dict with:
+                - 'cmd': Command string (required)
+                - 'cc': Channel/axis number (optional)
+                - 'nn': First parameter (optional)
+                - 'mm': Second parameter (optional)
+                - 'ee': Third parameter (optional)
+                - 'set': Boolean to set config value (optional, default False)
+                - 'mute_feedback' (bool): Whether to suppress command feedback output
+
+        Returns:
+            str: Combined response (note: with multiple commands,
+                only the response to the last command is typically returned)
+
+        Example:
+            device.send_commands([
+                {'cmd': Command.STOP_ALL, 'cc': 1},
+                {'cmd': Command.SET_SPEED, 'cc': 1, 'nn': 0},
+                {'cmd': Config.OPERATING_MODE, 'cc': 1, 'nn': 3, 'set': True}
+            ])
+        """
+        if not commands_list:
+            return ""
+
+        # Build the combined command string
+        command_parts = []
+
+        for cmd_spec in commands_list:
+            # Extract parameters from command specification
+            formatted_str = self._format_string(
+                cmd_spec["cmd"],
+                cc=cmd_spec.get("cc"),
+                nn=cmd_spec.get("nn"),
+                mm=cmd_spec.get("mm"),
+                ee=cmd_spec.get("ee"),
+                set=cmd_spec.get("set", False),
+            )
+
+            command_parts.append(formatted_str)
+
+        # Join commands with \r
+        combined_command = "\r".join(command_parts)
+        # Print the batch command, but ensure \r are displayed as \r
+        combined_command = combined_command.replace("\r", "\\r")
+        # Print the command with color codes
+        if mute_feedback:
+            combined_command = combined_command.replace("\\r", "\r")
+            print(f"{GREY}Sending batch command: {combined_command}{RESET}")
+        else:
+            # Print the command with color codes
+            combined_command = combined_command.replace("\\r", "\r")
+            # Print the command with color codes
+            print(f"{GREY}Sending batch command: {combined_command}{RESET}")
+
+        # Send the combined command
+        return self.send_raw(combined_command, mute_feedback=mute_feedback)
+
     # ----------------------------------------------------------------------------------------------------
     #           Linear motion
     # ----------------------------------------------------------------------------------------------------
@@ -530,7 +682,7 @@ class RoboteqDriver:
 
         # Get the encoder PPR value from controller configuration
         try:
-            eppr_response = self.send_raw("~EPPR 1")
+            eppr_response = self.send("~EPPR", cc=1, set=False)
             # Parse response (expected format: "EPPR=value")
             points_per_rev = abs(int(self.extract_value(eppr_response)))
 
@@ -616,13 +768,10 @@ class RoboteqDriver:
         # Set direction multiplier
         dir_multiplier = 1 if direction == "fwd" else -1
 
-        # Change to open-loop speed mode
-        self.send(Config.OPERATING_MODE, set=True, cc=axis, nn=0)
-        # Set speed to 0 to start
+        # Configure motion parameters individually
+        self.send(Config.OPERATING_MODE, cc=axis, nn=0, set=True)
         self.send(Command.GO_TO, cc=axis, nn=0)
-        # Set acceleration
         self.send(Command.SET_ACCELERATION, cc=axis, nn=speed * 10)  # Speed up slowly
-        # Set deceleration
         self.send(Command.SET_DECELERATION, cc=axis, nn=speed * 50)  # Slow down quickly
 
         # Start moving in specified direction
@@ -651,13 +800,20 @@ class RoboteqDriver:
         # Mark axis as homed
         self.linear_config[axis - 1]["homed"] = True
 
+        self.send_batch(
+            [
+                {"cmd": Command.STOP_ALL, "cc": axis},
+                {"cmd": Command.SET_SPEED, "cc": axis, "nn": 0},
+                {"cmd": Config.OPERATING_MODE, "cc": axis, "nn": 3, "set": True},
+            ]
+        )
         # Stop the motor
-        self.send(Command.STOP_ALL, cc=axis)
+        # self.send(Command.STOP_ALL, cc=axis)
         # Set speed to 0
-        self.send(
-            Command.SET_SPEED, cc=axis, nn=0
-        )  # Put controller back in closed-loop count position mode
-        self.send(Config.OPERATING_MODE, set=True, cc=axis, nn=3)
+        # self.send(
+        #    Command.SET_SPEED, cc=axis, nn=0
+        # )  # Put controller back in closed-loop count position mode
+        # self.send(Config.OPERATING_MODE, set=True, cc=axis, nn=3)
 
         print(f"{GREEN}Successfully homed {axis}. Position set to 0mm.{RESET}")
 
@@ -716,7 +872,7 @@ class RoboteqDriver:
         target_count = int(home_count) + int(position_mm * counts_per_mm)
 
         print(
-            f"{YELLOW}Moving axis {axis} to position {position_mm} mm (encoder count: {target_count}){RESET}"
+            f"{YELLOW}{self.name} moving axis {axis} to position {position_mm} mm (encoder count: {target_count}){RESET}"
         )
 
         # Set speed if provided
@@ -726,13 +882,8 @@ class RoboteqDriver:
         # Send position command
         self.send(Command.GO_TO_POSITION, cc=axis, nn=target_count)
 
-        # Wait for movement to complete if requested
         if wait:
-            print(f"{GREY}Waiting for axis {axis} to reach target position...{RESET}")
-            # Loops while mf = 0
-            mf = "DR=0"
-            while mf == "DR=0":
-                mf = self.send(Query.GET_DESTINATION_REACHED, cc=1, nn=0)
+            self.wait_for_position_reached(axis)
 
         return True
 

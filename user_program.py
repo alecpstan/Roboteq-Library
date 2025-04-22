@@ -41,19 +41,32 @@ def start_user_program(devices: List[RoboteqDriver]):
     devices[Driver1].linear_home_axis(axis=1, dio=0, direction="rev", speed=100)
 
     # Setup acceleration and deceleration
-    devices[Driver1].send(Command.SET_ACCELERATION, cc=1, nn=1000)
-    devices[Driver1].send(Command.SET_DECELERATION, cc=1, nn=1000)
+    devices[Driver1].send(Command.SET_ACCELERATION, cc=1, nn=3000)
+    devices[Driver1].send(Command.SET_DECELERATION, cc=1, nn=3000)
 
     # Run through your program loop.
     # E.g. Move to 500mm using linear motion
     devices[Driver1].linear_move_absolute_mm(
-        axis=1, position_mm=500, speed=500, wait=True
+        axis=1, position_mm=500, speed=3000, wait=True
     )
 
-    # E.g. Move to 500mm using linear motion
-    devices[Driver1].linear_move_absolute_mm(
-        axis=1, position_mm=1000, speed=500, wait=True
-    )
+    # E.g. Loop through positions in a list. Positions are stored as tuples, X and Y
+    positions = [(0, 0), (100, 100), (200, 200), (300, 300)]
+    for pos in positions:
+        x, y = pos
+        devices[Driver1].linear_move_absolute_mm(
+            axis=1, position_mm=x, speed=2000, wait=False
+        )
+        devices[Driver1].linear_move_absolute_mm(
+            axis=2, position_mm=y, speed=2000, wait=False
+        )
+        # Only progress when both axes are done
+        arrived = False
+        while not arrived:
+            # Check if both axes are moving
+            arrived = devices[Driver1].wait_for_position_reached([1, 2])
+        # Do code once reached
+        print(f"{GREEN}Arrived at position {x}, {y}{RESET}")
 
     # TODO: Example of how to use the query function
     # TODO: Example of how to use DIO
