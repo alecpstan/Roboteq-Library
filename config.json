@@ -1,7 +1,7 @@
 [
     {
         "type": "serial",
-        "name": "Dev3",
+        "name": "Driver1",
         "num_axes": 1,
         "timeout": 1.0,
         "port": "/dev/tty.usbmodemSBL1XXX1"

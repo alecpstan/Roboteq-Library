@@ -376,14 +376,14 @@ class RoboteqDriver:
             data = b""
             while True:
                 char = self.connection.recv(1)
-                if not char or char == b"\n":
+                if not char or char == b"\r":
                     break
                 data += char
-            return data + b"\n"
+            return data + b"\r"
         else:
             raise TypeError("Connection must be either serial.Serial or socket.socket")
 
-    def send_raw(self, str):
+    def send_raw(self, str, ignore_echo=True):
         """
         Send raw string to the Roboteq controller
 
@@ -393,20 +393,27 @@ class RoboteqDriver:
             str: Response from the controller
         """
 
-        # Check if string already ends with \r\n
-        if str.endswith("\r\n"):
+        # Check if string already ends with \r
+        if str.endswith("\r"):
             to_send = str
         else:
-            to_send = f"{str}\r\n"
+            to_send = f"{str}\r"
         self._send_data(to_send.encode())
-        return self._read_data().decode().strip()
+        # Wait for response
+        response = self._read_data().decode().strip()
+        # if ignore_echo, split at \r and take the last part
+        if ignore_echo:
+            response = response.split("\r")[-1]
+        response = response.replace("\r", "\r\n")
+
+        return response
 
     def send(self, send_str, cc=None, nn=None, mm=None, ee=None, set=False):
         """
         Send a runtime command to the controller
 
         Args:
-            send_str (str): Command string from cmd class
+            send_str (str): Command string
             cc (int or str): Usually Axis number (default: 1)
             nn (int, optional): Value for command if required
             set (bool): If True, command will set the config value (default: False). Ignored if not Config command
@@ -418,11 +425,11 @@ class RoboteqDriver:
             ValueError: If command not in command class or command fails
         """
         # Determine which command type and set prefix accordingly
-        if hasattr(Command, send_str):
+        if send_str in vars(Command).values():
             prefix = "!"
-        elif hasattr(Query, send_str):
+        elif send_str in vars(Query).values():
             prefix = "?"
-        elif hasattr(Config, send_str):
+        elif send_str in vars(Config).values():
             prefix = "^" if set else "~"
         else:
             raise ValueError(
@@ -430,7 +437,7 @@ class RoboteqDriver:
             )
 
         # Create the initial command string with the appropriate prefix
-        formatted_str = f"{prefix}{send_str}\r\n"
+        formatted_str = f"{prefix}{send_str}\r"
 
         # Replace cc with its value if present in the string
         if cc is not None:
