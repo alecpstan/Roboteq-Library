@@ -66,7 +66,7 @@ class Command:
 
     # Other Commands
     # RAW_DIRECT_SEND = "CU ee nn"
-    # RUN_MICROBASIC = "R nn"
+    RUN_MICROBASIC = "R nn"
 
     # TODO DS402 not yet implemented
 
@@ -81,7 +81,7 @@ class Query:
     # GET_PHASE_AMPS = "PHA cc"
 
     # System Status Queries
-    GET_BOOLEAN = "B nn"
+
     # GET_BATTERY_AMPS = "BA cc"
     # GET_SENSOR_RELATIVE = "BCR cc nn" # nn only in RoboCAN
     GET_BRAKE = "BRK cc"
@@ -137,6 +137,7 @@ class Query:
     GET_TEMP = "T cc"
     # GET_VOLTS = "V ee"
     GET_VAR = "VAR ee"
+    GET_BOOLEAN = "B nn"
 
     # CAN Queries
     # CAN_FRAME = "CAN ee"

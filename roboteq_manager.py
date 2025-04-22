@@ -728,7 +728,15 @@ class RoboteqDriver:
         return True
 
     # ----------------------------------------------------------------------------------------------------
-    def linear_home_axis(self, axis, dio, direction="rev", speed=100):
+    def linear_home_axis(
+        self,
+        axis,
+        dio,
+        direction="rev",
+        speed=100,
+        use_embedded_script=False,
+        homing_bool=0,
+    ):
         """
         Home an axis using a limit switch or sensor connected to a digital input
 
@@ -737,87 +745,148 @@ class RoboteqDriver:
             dio (int): Digital input pin number for home sensor
             direction (str): Direction to move during homing ("fwd" or "rev")
             speed (int): Homing speed (default: 100)
-            deceleration (int): Deceleration nn (default: 3000)
+            use_embedded_script (bool): If True, use embedded script for homing
 
         Returns:
-            bool: True if homing successful
-
-        Raises:
-            ValueError: If cc is not configured for linear movement or parameters are invalid
+            bool: True if homing successful, False otherwise
         """
-
-        print(
-            f"{YELLOW}Homing axis {axis} using digital input {dio} in {direction} direction at speed {speed}...{RESET}"
-        )
-        # Validate axis is configured for linear movement
-        if (axis - 1) not in self.linear_config or not self.linear_config[axis - 1][
-            "enabled"
-        ]:
-            raise ValueError(
-                f"Axis {axis} is not configured for linear movement. Call configure_linear first."
-            )
-
-        # Validate direction
-        if direction not in ["fwd", "rev"]:
-            raise ValueError("Direction must be 'fwd' or 'rev'")
-
-        # Validate DIO pin
-        if not isinstance(dio, int) or dio < 0:
-            raise ValueError("DIO pin must be a positive integer")
-
-        # Set direction multiplier
-        dir_multiplier = 1 if direction == "fwd" else -1
-
-        # Configure motion parameters individually
-        self.send(Config.OPERATING_MODE, cc=axis, nn=0, set=True)
-        self.send(Command.GO_TO, cc=axis, nn=0)
-        self.send(Command.SET_ACCELERATION, cc=axis, nn=speed * 10)  # Speed up slowly
-        self.send(Command.SET_DECELERATION, cc=axis, nn=speed * 50)  # Slow down quickly
-
-        # Start moving in specified direction
-        speed_value = speed * dir_multiplier
-        self.send(Command.GO_TO, cc=axis, nn=speed_value)
-        print(f"Homing axis {axis} in {direction} direction at speed {speed}...")
-
-        # Wait for home sensor (digital input) to trigger
-        dio_state = 0
-        while dio_state == 0:
-            # Query the specific digital input
-            response = self.send(Query.GET_DIN_SINGLE, cc=dio)
-
-            # Parse response (format: "DI=0" or "DI=1")
+        # If true, user is choosing to run a roboteq MicroBasic script which will set a bool = 1 when done.
+        if use_embedded_script:
+            # Run script
+            self.send(Command.RUN_MICROBASIC, 1)
+            # Wait for the script to finish
+            while True:
+                # Query the variable "homed" from the script
+                response = self.send(Query.GET_BOOLEAN, nn=homing_bool)
+                # Check if the response is "True"
+                if int(self.extract_value(response)) == 1:
+                    print(f"{GREEN}Homing completed successfully.{RESET}")
+                    break
+                else:
+                    print(f"{GREY}Waiting for homing to complete...{RESET}")
+                    time.sleep(0.1)
+            # Get the current position and set as home
             try:
-                dio_state = self.extract_list(response)[0]
-                dio_state = int(dio_state)
+                home_count = self.extract_value(
+                    self.send(Query.GET_ENCODER_COUNTER, cc=axis)
+                )
+                self.linear_config[axis - 1]["home_count"] = home_count
+                # Mark axis as homed
+                self.linear_config[axis - 1]["homed"] = True
+                return True
+            except Exception as e:
+                print(f"{RED}Error setting home position: {str(e)}{RESET}")
+                return False
 
-            except (IndexError, ValueError):
-                raise ValueError(f"Invalid response format: {response}")
-        # Get the current position and set as home
-        self.linear_config[axis - 1]["home_count"] = self.extract_value(
-            self.send(Query.GET_ENCODER_COUNTER, cc=axis)
-        )
+        else:
+            try:
+                print(
+                    f"{YELLOW}Homing axis {axis} using digital input {dio} in {direction} direction at speed {speed}...{RESET}"
+                )
 
-        # Mark axis as homed
-        self.linear_config[axis - 1]["homed"] = True
+                # Validate axis is configured for linear movement
+                is_valid, error_message = self._check_axis_configuration(axis)
+                if not is_valid:
+                    print(
+                        f"{YELLOW}Warning: {error_message}. Call linear_configure first.{RESET}"
+                    )
+                    return False
 
-        self.send_batch(
-            [
-                {"cmd": Command.STOP_ALL, "cc": axis},
-                {"cmd": Command.SET_SPEED, "cc": axis, "nn": 0},
-                {"cmd": Config.OPERATING_MODE, "cc": axis, "nn": 3, "set": True},
-            ]
-        )
-        # Stop the motor
-        # self.send(Command.STOP_ALL, cc=axis)
-        # Set speed to 0
-        # self.send(
-        #    Command.SET_SPEED, cc=axis, nn=0
-        # )  # Put controller back in closed-loop count position mode
-        # self.send(Config.OPERATING_MODE, set=True, cc=axis, nn=3)
+                # Validate direction
+                if direction not in ["fwd", "rev"]:
+                    print(
+                        f"{YELLOW}Warning: Direction must be 'fwd' or 'rev', using 'rev' as default{RESET}"
+                    )
+                    direction = "rev"
 
-        print(f"{GREEN}Successfully homed {axis}. Position set to 0mm.{RESET}")
+                # Validate DIO pin
+                if not isinstance(dio, int) or dio < 0:
+                    print(f"{YELLOW}Warning: DIO pin must be a positive integer{RESET}")
+                    return False
 
-        return True
+                # Set direction multiplier
+                dir_multiplier = 1 if direction == "fwd" else -1
+
+                # Configure motion parameters individually
+                self.send(Config.OPERATING_MODE, cc=axis, nn=0, set=True)
+                self.send(Command.GO_TO, cc=axis, nn=0)
+                self.send(
+                    Command.SET_ACCELERATION, cc=axis, nn=speed * 10
+                )  # Speed up slowly
+                self.send(
+                    Command.SET_DECELERATION, cc=axis, nn=speed * 50
+                )  # Slow down quickly
+
+                # Start moving in specified direction
+                speed_value = speed * dir_multiplier
+                self.send(Command.GO_TO, cc=axis, nn=speed_value)
+                print(
+                    f"Homing axis {axis} in {direction} direction at speed {speed}..."
+                )
+
+                # Wait for home sensor (digital input) to trigger
+                dio_state = 0
+
+                while dio_state == 0:
+                    # Query all digital inputs
+                    try:
+                        response = self.send(Query.GET_DIN, cc=axis)
+                        din_values = self.extract_list(response)
+                        # Check the specific digital input (dio is 0-indexed)
+                        if 0 <= dio < len(din_values):
+                            dio_state = din_values[dio]
+                        else:
+                            print(
+                                f"{YELLOW}Warning: DIO index {dio} out of range.{RESET}"
+                            )
+                            dio_state = 0
+                    except (IndexError, ValueError) as e:
+                        print(
+                            f"{YELLOW}Warning: Error reading sensor: {str(e)}. Retrying...{RESET}"
+                        )
+                        continue
+
+                # Get the current position and set as home
+                try:
+                    home_count = self.extract_value(
+                        self.send(Query.GET_ENCODER_COUNTER, cc=axis)
+                    )
+                    self.linear_config[axis - 1]["home_count"] = home_count
+                    # Mark axis as homed
+                    self.linear_config[axis - 1]["homed"] = True
+                except Exception as e:
+                    print(f"{RED}Error setting home position: {str(e)}{RESET}")
+                    return False
+
+                # Stop and configure for position mode
+                try:
+                    self.send_batch(
+                        [
+                            {"cmd": Command.STOP_ALL, "cc": axis},
+                            {"cmd": Command.SET_SPEED, "cc": axis, "nn": 0},
+                            {
+                                "cmd": Config.OPERATING_MODE,
+                                "cc": axis,
+                                "nn": 3,
+                                "set": True,
+                            },
+                        ]
+                    )
+                except Exception as e:
+                    print(f"{RED}Error stopping motor: {str(e)}{RESET}")
+                    return False
+
+                print(f"{GREEN}Successfully homed {axis}. Position set to 0mm.{RESET}")
+                return True
+
+            except Exception as e:
+                print(f"{RED}Error during homing: {str(e)}{RESET}")
+                # Emergency stop
+                try:
+                    self.send(Command.STOP_ALL, cc=axis)
+                except:
+                    pass
+                return False
 
     # ----------------------------------------------------------------------------------------------------
     def linear_move_absolute_mm(self, axis, position_mm, speed=None, wait=False):
@@ -831,61 +900,109 @@ class RoboteqDriver:
             wait (bool): If True, wait for movement to complete
 
         Returns:
-            bool: True if movement completed successfully
-
-        Raises:
-            ValueError: If axis is not configured for linear movement or not homed
+            bool: True if movement completed successfully, False otherwise
         """
-        # Validate axis is configured for linear movement
-        if (axis - 1) not in self.linear_config or not self.linear_config[axis - 1][
-            "enabled"
-        ]:
-            raise ValueError(
-                f"{RED}Axis {axis} is not configured for linear movement. Call configure_linear first.{RESET}"
-            )
-
-        # Get the linear configuration
-        config = self.linear_config[axis - 1]
-        # Check if axis is homed
-        if "home_count" not in config or config["home_count"] is None:
-            raise ValueError(
-                f"{RED}Axis {axis} is not homed. Call linear_home_axis first.{RESET}"
-            )
-        home_count = config["home_count"]
-        points_per_rev = config["points_per_rev"]
-        mm_per_rev = config["mm_per_rev"]
-
-        # Check position limits if configured
-        min_mm = config["min_mm"]
-        max_mm = config["max_mm"]
-        if min_mm is not None and position_mm < min_mm:
-            raise ValueError(
-                f"Target position {position_mm}mm is below minimum limit {min_mm}mm"
-            )
-        if max_mm is not None and position_mm > max_mm:
-            raise ValueError(
-                f"Target position {position_mm}mm is above maximum limit {max_mm}mm"
-            )
-
-        # Calculate target encoder position
-        counts_per_mm = points_per_rev * mm_per_rev
-        target_count = int(home_count) + int(position_mm * counts_per_mm)
-
-        print(
-            f"{YELLOW}{self.name} moving axis {axis} to position {position_mm} mm (encoder count: {target_count}){RESET}"
+        # Validate axis configuration
+        is_valid, error_message = self._check_axis_configuration(
+            axis, require_homed=True
         )
+        if not is_valid:
+            print(
+                f"{YELLOW}Warning: {error_message}. Call linear_configure and linear_home_axis first.{RESET}"
+            )
+            return False
 
-        # Set speed if provided
-        if speed is not None:
-            self.send(Command.SET_SPEED, cc=axis, nn=speed)
+        try:
+            # Get the linear configuration
+            config = self.linear_config[axis - 1]
+            home_count = config["home_count"]
+            points_per_rev = config["points_per_rev"]
+            mm_per_rev = config["mm_per_rev"]
 
-        # Send position command
-        self.send(Command.GO_TO_POSITION, cc=axis, nn=target_count)
+            # Check position limits if configured
+            min_mm = config.get("min_mm")
+            max_mm = config.get("max_mm")
 
-        if wait:
-            self.wait_for_position_reached(axis)
+            if min_mm is not None and position_mm < min_mm:
+                print(
+                    f"{YELLOW}Warning: Target position {position_mm}mm is below minimum limit {min_mm}mm{RESET}"
+                )
+                position_mm = min_mm
+                print(f"{YELLOW}Clamping to minimum position {min_mm}mm{RESET}")
 
-        return True
+            if max_mm is not None and position_mm > max_mm:
+                print(
+                    f"{YELLOW}Warning: Target position {position_mm}mm is above maximum limit {max_mm}mm{RESET}"
+                )
+                position_mm = max_mm
+                print(f"{YELLOW}Clamping to maximum position {max_mm}mm{RESET}")
+
+            # Calculate target encoder position
+            counts_per_mm = points_per_rev / mm_per_rev  # Corrected calculation
+            target_count = int(float(home_count)) + int(position_mm * counts_per_mm)
+
+            print(
+                f"{YELLOW}{self.name} moving axis {axis} to position {position_mm} mm (encoder count: {target_count}){RESET}"
+            )
+
+            # Set speed if provided
+            if speed is not None:
+                self.send(Command.SET_SPEED, cc=axis, nn=speed)
+
+            # Send position command
+            self.send(Command.GO_TO_POSITION, cc=axis, nn=target_count)
+
+            if wait:
+                try:
+                    self.wait_for_position_reached(axis)
+                except Exception as e:
+                    print(
+                        f"{YELLOW}Warning: Error while waiting for position: {str(e)}{RESET}"
+                    )
+                    return False
+
+            return True
+
+        except Exception as e:
+            print(f"{RED}Error during linear movement: {str(e)}{RESET}")
+            return False
+
+    def _check_axis_configuration(self, axis, require_homed=False):
+        """
+        Check if an axis is properly configured for linear movement.
+
+        Args:
+            axis (int): Axis number to check
+            require_homed (bool): Whether to check if the axis is homed
+
+        Returns:
+            tuple: (is_valid, error_message)
+                - is_valid: True if configuration is valid, False otherwise
+                - error_message: Description of the issue if not valid, None otherwise
+        """
+        # Check if axis is valid
+        if not isinstance(axis, int) or axis < 1 or axis > self._MAX_AXES:
+            return (
+                False,
+                f"Invalid axis number: {axis}. Must be between 1 and {self._MAX_AXES}",
+            )
+
+        # Check if axis is configured for linear movement
+        if (axis - 1) not in self.linear_config:
+            return False, f"Axis {axis} is not configured for linear movement"
+
+        if not self.linear_config[axis - 1].get("enabled", False):
+            return False, f"Axis {axis} is not enabled for linear movement"
+
+        # Check if axis is homed when required
+        if require_homed:
+            if (
+                "home_count" not in self.linear_config[axis - 1]
+                or self.linear_config[axis - 1]["home_count"] is None
+            ):
+                return False, f"Axis {axis} is not homed"
+
+        return True, None
 
     # ----------------------------------------------------------------------------------------------------
     #           Tidy up
