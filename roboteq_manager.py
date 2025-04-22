@@ -224,7 +224,7 @@ class RoboteqDriver:
         com_port=None,
         host=None,
         tcp_port=9571,
-        timeout=0.5,
+        timeout=0.1,
         name="Unnamed",
         num_axis=1,
     ):
@@ -406,6 +406,16 @@ class RoboteqDriver:
             response = response.split("\r")[-1]
         response = response.replace("\r", "\r\n")
 
+        # Check for error response
+        if response == "-":
+            # Raise error without color codes to avoid issues with exception handling
+            raise ValueError(f"Command {to_send} failed")
+        else:
+            # Check if response is a valid command
+            print(
+                f"Command sent: {to_send.strip()}  {GREY}Response: {response.strip()}{RESET}"
+            )
+
         return response
 
     def send(self, send_str, cc=None, nn=None, mm=None, ee=None, set=False):
@@ -458,11 +468,44 @@ class RoboteqDriver:
         # Use send_raw to handle sending the command
         response = self.send_raw(formatted_str)
 
-        # Check for error response
-        if response == "-":
-            raise ValueError(f"Command {formatted_str} failed")
-
         return response
+
+    # ----------------------------------------------------------------------------------------------------
+    #           Helper functions
+    # ----------------------------------------------------------------------------------------------------
+
+    def extract_value(self, response):
+        """
+        Extract the value from a response string
+
+        Args:
+            response (str): Response string from the controller
+
+        Returns:
+            str: Extracted value
+        """
+        # Split the response by '=' and return the second part
+        try:
+            return response.split("=")[1].strip()
+        except IndexError:
+            raise ValueError(f"Invalid response format: {response}")
+
+    def extract_list(self, response):
+        """
+        Extract a list of values from a response string
+
+        Args:
+            response (str): Response string from the controller
+
+        Returns:
+            list: List of extracted values
+        """
+        # Split the response by '=' to get the ":" separated values
+        try:
+            values = response.split("=")[1].strip().split(":")
+            return [int(value) for value in values]
+        except (IndexError, ValueError):
+            raise ValueError(f"Invalid response format: {response}")
 
     # ----------------------------------------------------------------------------------------------------
     #           Linear motion
@@ -487,16 +530,15 @@ class RoboteqDriver:
 
         # Get the encoder PPR value from controller configuration
         try:
-            eppr_response = self.motor_config(Config.EPPR, set=False, cc=axis)
+            eppr_response = self.send_raw("~EPPR 1")
             # Parse response (expected format: "EPPR=value")
-            points_per_rev = int(eppr_response.split("=")[1])
+            points_per_rev = abs(int(self.extract_value(eppr_response)))
+
         except (ValueError, IndexError) as e:
             raise ValueError(f"Failed to retrieve EPPR value from controller: {str(e)}")
 
         if points_per_rev <= 0:
-            raise ValueError(
-                "Invalid EPPR received from controller. Configure EPPR first using motor_config method."
-            )
+            raise ValueError("Invalid EPPR received from controller.")
 
         # Validate min/max if provided
         if min_mm is not None and max_mm is not None:
@@ -510,36 +552,37 @@ class RoboteqDriver:
             "points_per_rev": points_per_rev,
             "mm_per_rev": mm_per_rev,
             "enabled": True,
-            "homed": False,
             "min_mm": min_mm,
             "max_mm": max_mm,
+            "home_count": None,
         }
 
         # Put controller in closed-loop count position mode
-        self.motor_config(Config.OPERATING_MODE, set=True, cc=axis, nn=3)
+        self.send(Config.OPERATING_MODE, set=True, cc=axis, nn=3)
 
-        print(f"Axis {axis} configured for linear movement:")
+        print(f"{GREEN}Axis {axis} configured for linear movement:{RESET}")
         print(
             f"  Points per revolution: {points_per_rev} (from controller EPPR configuration)"
         )
-        print(f"  Millimeters per revolution: {mm_per_rev}")
+        print(f"  Millimeters per revolution: {mm_per_rev} mm/Rev")
         if min_mm is not None:
-            print(f"  Minimum position: {min_mm}mm")
+            print(f"  Minimum position: {min_mm} mm")
         if max_mm is not None:
-            print(f"  Maximum position: {max_mm}mm")
-        print(f"  Note: Axis must be homed before absolute positioning can be used")
+            print(f"  Maximum position: {max_mm} mm")
+        print(
+            f"{YELLOW}  Note: Axis must be homed before absolute positioning can be used {RESET}"
+        )
 
         return True
 
-    def linear_home_axis(
-        self, axis, dio_pin, direction="rev", speed=100, deceleration=3000
-    ):
+    # ----------------------------------------------------------------------------------------------------
+    def linear_home_axis(self, axis, dio, direction="rev", speed=100):
         """
         Home an axis using a limit switch or sensor connected to a digital input
 
         Args:
             axis (int): Axis number
-            dio_pin (int): Digital input pin number for home sensor
+            dio (int): Digital input pin number for home sensor
             direction (str): Direction to move during homing ("fwd" or "rev")
             speed (int): Homing speed (default: 100)
             deceleration (int): Deceleration nn (default: 3000)
@@ -550,236 +593,148 @@ class RoboteqDriver:
         Raises:
             ValueError: If cc is not configured for linear movement or parameters are invalid
         """
+
+        print(
+            f"{YELLOW}Homing axis {axis} using digital input {dio} in {direction} direction at speed {speed}...{RESET}"
+        )
         # Validate axis is configured for linear movement
-        if (
-            axis not in self.linear_config
-            or not self.linear_config[axis - 1]["enabled"]
-        ):
+        if (axis - 1) not in self.linear_config or not self.linear_config[axis - 1][
+            "enabled"
+        ]:
             raise ValueError(
                 f"Axis {axis} is not configured for linear movement. Call configure_linear first."
             )
-        if not self.linear_config[axis - 1]["homed"]:
-            raise ValueError(f"Axis {axis} has not been homed. Call home_axis first.")
 
         # Validate direction
         if direction not in ["fwd", "rev"]:
             raise ValueError("Direction must be 'fwd' or 'rev'")
 
         # Validate DIO pin
-        if not isinstance(dio_pin, int) or dio_pin < 1:
+        if not isinstance(dio, int) or dio < 0:
             raise ValueError("DIO pin must be a positive integer")
 
         # Set direction multiplier
         dir_multiplier = 1 if direction == "fwd" else -1
 
+        # Change to open-loop speed mode
+        self.send(Config.OPERATING_MODE, set=True, cc=axis, nn=0)
+        # Set speed to 0 to start
+        self.send(Command.GO_TO, cc=axis, nn=0)
+        # Set acceleration
+        self.send(Command.SET_ACCELERATION, cc=axis, nn=speed * 10)  # Speed up slowly
         # Set deceleration
-        self.run_command(Command.SET_DECELERATION, cc=axis, nn=deceleration)
-
-        # Change to closed-loop speed mode
-        self.motor_config(Config.OPERATING_MODE, set=True, cc=axis, nn=1)
+        self.send(Command.SET_DECELERATION, cc=axis, nn=speed * 50)  # Slow down quickly
 
         # Start moving in specified direction
         speed_value = speed * dir_multiplier
+        self.send(Command.GO_TO, cc=axis, nn=speed_value)
         print(f"Homing axis {axis} in {direction} direction at speed {speed}...")
-        self.run_command(Command.SET_SPEED, cc=axis, nn=speed_value)
 
         # Wait for home sensor (digital input) to trigger
         dio_state = 0
         while dio_state == 0:
             # Query the specific digital input
-            response = self.run_query(Query.GET_DIN_SINGLE, cc=dio_pin)
+            response = self.send(Query.GET_DIN_SINGLE, cc=dio)
 
             # Parse response (format: "DI=0" or "DI=1")
             try:
-                dio_state = int(response.split("=")[1])
+                dio_state = self.extract_list(response)[0]
+                dio_state = int(dio_state)
+
             except (IndexError, ValueError):
                 raise ValueError(f"Invalid response format: {response}")
+        # Get the current position and set as home
+        self.linear_config[axis - 1]["home_count"] = self.extract_value(
+            self.send(Query.GET_ENCODER_COUNTER, cc=axis)
+        )
 
-            # Small delay to avoid excessive CPU usage
-            time.sleep(0.01)
-
-        # Stop the motor
-        self.run_command(Command.SET_SPEED, cc=axis, nn=0)
-
-        # Wait for motor to come to a complete stop
-        moving = True
-        while moving:
-            # Query speed
-            response = self.run_query(Query.GET_SPEED, cc=axis)
-
-            # Parse response (format: "S=nn")
-            try:
-                speed_value = int(response.split("=")[1])
-                moving = abs(speed_value) > 0
-            except (IndexError, ValueError):
-                raise ValueError(f"Invalid response format: {response}")
-
-            time.sleep(0.05)
-
-        # Reset encoder to zero
-        self.run_command(Command.SET_ENCODER, cc=axis, nn=0)
-
-        # Put controller back in closed-loop count position mode
-        self.motor_config(Config.OPERATING_MODE, set=True, cc=axis, nn=3)
-
-        # Mark cc as homed
+        # Mark axis as homed
         self.linear_config[axis - 1]["homed"] = True
 
-        print(f"Successfully homed {axis}. Position set to 0mm.")
+        # Stop the motor
+        self.send(Command.STOP_ALL, cc=axis)
+        # Set speed to 0
+        self.send(
+            Command.SET_SPEED, cc=axis, nn=0
+        )  # Put controller back in closed-loop count position mode
+        self.send(Config.OPERATING_MODE, set=True, cc=axis, nn=3)
+
+        print(f"{GREEN}Successfully homed {axis}. Position set to 0mm.{RESET}")
 
         return True
 
-    def linear_move_absolute_mm(
-        self, axis, position_mm, wait=True, position_tolerance=25
-    ):
+    # ----------------------------------------------------------------------------------------------------
+    def linear_move_absolute_mm(self, axis, position_mm, speed=None, wait=False):
         """
-        Move an axis to an absolute position in millimeters relative to home position
+        Move an axis to an absolute position in millimeters.
 
         Args:
-            axis (int): Axis number
-            position_mm (float or str): Target position in millimeters or "home" to move to home position
-            wait (bool): Whether to wait for the move to complete (default: True)
+            axis (int): Axis number (1-3)
+            position_mm (float): Target position in millimeters
+            speed (int, optional): Movement speed (if None, uses current speed)
+            wait (bool): If True, wait for movement to complete
 
         Returns:
-            str: Response from controller
+            bool: True if movement completed successfully
 
         Raises:
-            ValueError: If axis is not configured for linear movement, not homed, or position is out of bounds
+            ValueError: If axis is not configured for linear movement or not homed
         """
         # Validate axis is configured for linear movement
-        if (
-            axis not in self.linear_config
-            or not self.linear_config[axis - 1]["enabled"]
-        ):
+        if (axis - 1) not in self.linear_config or not self.linear_config[axis - 1][
+            "enabled"
+        ]:
             raise ValueError(
-                f"Axis {axis} is not configured for linear movement. Call linear_configure first."
+                f"{RED}Axis {axis} is not configured for linear movement. Call configure_linear first.{RESET}"
             )
 
-        # Check if axis has been homed
-        if not self.linear_config[axis - 1]["homed"]:
+        # Get the linear configuration
+        config = self.linear_config[axis - 1]
+        # Check if axis is homed
+        if "home_count" not in config or config["home_count"] is None:
             raise ValueError(
-                f"Axis {axis} has not been homed. Call linear_home_axis first."
+                f"{RED}Axis {axis} is not homed. Call linear_home_axis first.{RESET}"
             )
+        home_count = config["home_count"]
+        points_per_rev = config["points_per_rev"]
+        mm_per_rev = config["mm_per_rev"]
 
-        # Handle 'home' position keyword
-        if position_mm == "home":
-            position_mm = 0
-            print(f"Moving axis {axis} to home position (0mm)")
-
-        # Check if position is valid
-        if not isinstance(position_mm, (int, float)):
-            raise ValueError(
-                f"Position must be a number or 'home', got {type(position_mm)}"
-            )
-
-        # Get configuration and check limits
-        axis_config = self.linear_config[axis - 1]
-        min_mm = axis_config.get("min_mm")
-        max_mm = axis_config.get("max_mm")
-
-        # Check position limits if they are defined
+        # Check position limits if configured
+        min_mm = config["min_mm"]
+        max_mm = config["max_mm"]
         if min_mm is not None and position_mm < min_mm:
             raise ValueError(
-                f"Position {position_mm}mm is below minimum limit of {min_mm}mm"
+                f"Target position {position_mm}mm is below minimum limit {min_mm}mm"
             )
         if max_mm is not None and position_mm > max_mm:
             raise ValueError(
-                f"Position {position_mm}mm is above maximum limit of {max_mm}mm"
+                f"Target position {position_mm}mm is above maximum limit {max_mm}mm"
             )
 
-        # Get encoder parameters
-        points_per_rev = axis_config["points_per_rev"]
-        mm_per_rev = axis_config["mm_per_rev"]
+        # Calculate target encoder position
+        counts_per_mm = points_per_rev * mm_per_rev
+        target_count = int(home_count) + int(position_mm * counts_per_mm)
 
-        # Calculate position in encoder counts
-        position_counts = int(position_mm * points_per_rev / mm_per_rev)
+        print(
+            f"{YELLOW}Moving axis {axis} to position {position_mm} mm (encoder count: {target_count}){RESET}"
+        )
 
-        # Send position command to controller
-        print(f"Moving axis {axis} to {position_mm}mm from home")
-        response = self.run_command(Command.GO_TO_POSITION, cc=axis, nn=position_counts)
+        # Set speed if provided
+        if speed is not None:
+            self.send(Command.SET_SPEED, cc=axis, nn=speed)
 
-        # If wait is not requested, return immediately
-        if not wait:
-            return response
+        # Send position command
+        self.send(Command.GO_TO_POSITION, cc=axis, nn=target_count)
 
-        # Otherwise, wait for the move to complete by polling position
-        print(f"Waiting for axis {axis} to reach target position...")
+        # Wait for movement to complete if requested
+        if wait:
+            print(f"{GREY}Waiting for axis {axis} to reach target position...{RESET}")
+            # Loops while mf = 0
+            mf = "DR=0"
+            while mf == "DR=0":
+                mf = self.send(Query.GET_DESTINATION_REACHED, cc=1, nn=0)
 
-        # Set parameters for position monitoring
-        max_wait_time = 30  # Maximum wait time in seconds
-        poll_interval = 0.1  # Time between position checks in seconds
-        start_time = time.time()
-
-        while True:
-            # Get current encoder position
-            current_position_response = self.run_query(Query.GET_COUNTER, cc=axis)
-
-            try:
-                # Parse response (format: "C=1234")
-                current_position = int(current_position_response.split("=")[1])
-
-                # Check if position reached within tolerance
-                if abs(current_position - position_counts) <= position_tolerance:
-                    print(f"Position reached: {current_position} counts")
-                    return response
-
-                # Check for timeout
-                if time.time() - start_time > max_wait_time:
-                    print(
-                        f"Warning: Move timeout after {max_wait_time} seconds. Target: {position_counts}, Current: {current_position}"
-                    )
-                    return response
-
-            except (ValueError, IndexError):
-                print(
-                    f"Warning: Could not parse position response: {current_position_response}"
-                )
-
-            # Wait before next check
-            time.sleep(poll_interval)
-
-    def linear_get_position_mm(self, axis):
-        """
-        Get current position of an Axis in millimeters
-
-        Args:
-            axis (int): Axis number
-
-        Returns:
-            float: Current position in millimeters
-
-        Raises:
-            ValueError: If cc is not configured for linear movement
-        """
-        # Validate axis is configured for linear movement
-        if (
-            axis not in self.linear_config
-            or not self.linear_config[axis - 1]["enabled"]
-        ):
-            raise ValueError(
-                f"Axis {axis} is not configured for linear movement. Call configure_linear first."
-            )
-        if not self.linear_config[axis - 1]["homed"]:
-            raise ValueError(f"Axis {axis} has not been homed. Call home_axis first.")
-
-        # Get configuration
-        motor_settings = self.linear_config[axis - 1]
-        points_per_rev = motor_settings["points_per_rev"]
-        mm_per_rev = motor_settings["mm_per_rev"]
-
-        # Get current position in encoder counts
-        response = self.run_query(Query.GET_COUNTER, cc=axis)
-
-        # Parse response (format: "C=1234")
-        try:
-            position_counts = int(response.split("=")[1])
-        except (IndexError, ValueError):
-            raise ValueError(f"Invalid response format: {response}")
-
-        # Convert to millimeters
-        position_mm = position_counts * mm_per_rev / points_per_rev
-
-        return position_mm
+        return True
 
     # ----------------------------------------------------------------------------------------------------
     #           Tidy up

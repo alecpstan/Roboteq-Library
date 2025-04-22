@@ -20,7 +20,7 @@ class Command:
     # Stop commands
     EMERGENCY_STOP = "EX"
     RELEASE_ESTOP = "MG"
-    STOP_ALL_MODES = "MS cc"
+    STOP_ALL = "MS cc"
     QUICK_STOP_CHANNEL = "QST cc"
     RESET_DRIVE = "RST"
 

@@ -614,7 +614,15 @@ def main():
         print("Devices ready for use.")
 
         # Import and run the user program
-        # ... (code to import and run user program)
+        # Ask the user if they want to run the user program
+        if prompt_yes_no("Would you like to run the user program?"):
+            # Import the user program
+            import user_program
+
+            # Run the user program
+            user_program.start_user_program(all_devices)
+        else:
+            pass
 
         # Close all connections
         import serial

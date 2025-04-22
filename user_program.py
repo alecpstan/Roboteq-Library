@@ -27,37 +27,41 @@ def start_user_program(devices: List[RoboteqDriver]):
     print(f"{GREY}*****************************************************{RESET}")
     print(f"    User program started with {len(devices)} devices.")
     print(f"{GREY}*****************************************************{RESET}")
+    # Just a variable to hold the list index for the devices.
     Driver1 = device_by_name("Driver1", devices)
-    time.sleep(2)
+
     # -----------------------------------------
     #               Your program
     # -----------------------------------------
+    devices[Driver1].send_raw("!RST")  # First command doesnt respond
+    devices[Driver1].send_raw("?FID")
+
     # Start with some linear configuration including homing
-    # devices[Driver1].linear_configure(axis=1, mm_per_rev=50, min_mm=0, max_mm=5000)
-    # devices[Driver1].linear_home_axis(
-    #    axis=1, dio=0, direction="rev", speed=100, deceleration=3000
-    # )
+    devices[Driver1].linear_configure(axis=1, mm_per_rev=25, min_mm=0, max_mm=5000)
+    devices[Driver1].linear_home_axis(axis=1, dio=0, direction="rev", speed=100)
+
+    # Setup acceleration and deceleration
+    devices[Driver1].send(Command.SET_ACCELERATION, cc=1, nn=1000)
+    devices[Driver1].send(Command.SET_DECELERATION, cc=1, nn=1000)
+    # Move to 500mm using linear motion
+    devices[Driver1].linear_move_absolute_mm(
+        axis=1, position_mm=500, speed=500, wait=True
+    )
 
     # Setup done, set speed to operating speed
-    devices[Driver1].send(Command.SET_SPEED, cc=1, nn=2000)
-    print(f"{devices[Driver1].send(Command.GO_TO_POSITION, cc=1, nn=2000000)}")
+    # devices[Driver1].send(Command.SET_SPEED, cc=1, nn=2000)
+    # devices[Driver1].send(Command.GO_TO_POSITION, cc=1, nn=2000000)
 
     # Loops while mf = 0
-    mf = "DR=0"
-    while mf == "DR=0":
-        mf = devices[Driver1].send(Query.GET_DESTINATION_REACHED, cc=1, nn=0)
-        # print(f"{mf}")
+    # mf = "DR=0"
+    # while mf == "DR=0":
+    #    mf = devices[Driver1].send(Query.GET_DESTINATION_REACHED, cc=1, nn=0)
 
-    devices[Driver1].send(Command.SET_SPEED, cc=1, nn=3000)
-    print(f"{devices[Driver1].send(Command.GO_TO_POSITION, cc=1, nn=-2000000)}")
-
-    # Do your own thing, take sample etc
-
-    # Make next move
-    # devices[Driver1].linear_move_absolute_mm(axis=1, position_mm=-1000000, wait=True)
+    # devices[Driver1].send(Command.SET_SPEED, cc=1, nn=3000)
+    # devices[Driver1].send(Command.GO_TO_POSITION, cc=1, nn=-2000000)
 
     # Stop all devices
-    # devices[Driver1].send(Command.STOP_ALL)
+    devices[Driver1].send(Command.STOP_ALL, 1)
 
     return None
 
@@ -90,7 +94,7 @@ def device_by_name(name, devices):
 
 
 # ----------------------------------------------------------------------------------------------------
-#           If you want to run this file directly, instead of using the connection automation
+#           Main function if you want to run this file directly, instead of from the connection automation
 # ----------------------------------------------------------------------------------------------------
 
 
@@ -102,10 +106,11 @@ def main():
         None
     """
 
-    devices = []
-    # Initialize your devices here. In this example im loading them from a JSON file,
-    # but you can manually set them up like this
+    # Initialize your devices here.
     devices = json_parser.load_roboteq_devices_from_json("config.json")
+
+    # In this example im loading them from a JSON file, but you can manually set them up like this
+
     # devices = [
     #    RoboteqDriver(
     #        connect_using="serial",
@@ -120,7 +125,7 @@ def main():
     #    ),
     # ]
 
-    # Start the user program
+    # Start the user program. Ive put it in a separate function to allow it to be called externally.
     start_user_program(devices)
 
 
